@@ -62,9 +62,10 @@ void Board::clear() {
 
 void Board::put_piece(Piece pc, Square s) {
     board[s] = pc;
-    byTypeBB[0] |= s;  // All pieces
-    byTypeBB[type_of(pc)] |= s;
-    byColorBB[color_of(pc)] |= s;
+    Bitboard bb = square_bb(s);  // CRITICAL: Convert square index to bitboard!
+    byTypeBB[0] |= bb;           // All pieces
+    byTypeBB[type_of(pc)] |= bb;
+    byColorBB[color_of(pc)] |= bb;
     pieceCount[pc]++;
     pieceCount[make_piece(color_of(pc), NO_PIECE_TYPE)]++;  // Total for color
 
@@ -75,9 +76,10 @@ void Board::put_piece(Piece pc, Square s) {
 
 void Board::remove_piece(Square s) {
     Piece pc = board[s];
-    byTypeBB[0] ^= s;
-    byTypeBB[type_of(pc)] ^= s;
-    byColorBB[color_of(pc)] ^= s;
+    Bitboard bb = square_bb(s);  // CRITICAL: Convert square index to bitboard!
+    byTypeBB[0] ^= bb;
+    byTypeBB[type_of(pc)] ^= bb;
+    byColorBB[color_of(pc)] ^= bb;
     board[s] = NO_PIECE;
     pieceCount[pc]--;
     pieceCount[make_piece(color_of(pc), NO_PIECE_TYPE)]--;

@@ -71,6 +71,7 @@ private:
     void cmd_quit();
     void cmd_setoption(std::istringstream& is);
     void cmd_perft(std::istringstream& is);
+    void cmd_divide(std::istringstream& is);  // Debugging command
     void cmd_d();  // Display board (debug)
     void cmd_eval(); // Display evaluation (debug)
 

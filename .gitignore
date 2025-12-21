@@ -13,7 +13,8 @@
 
 # Linker files
 *.ilk
-
+*.txt
+*.md
 # Debugger Files
 *.pdb
 

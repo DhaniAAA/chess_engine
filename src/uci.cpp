@@ -69,6 +69,8 @@ void UCIHandler::loop() {
             cmd_setoption(is);
         } else if (token == "perft") {
             cmd_perft(is);
+        } else if (token == "divide") {
+            cmd_divide(is);
         } else if (token == "d") {
             cmd_d();
         } else if (token == "eval") {
@@ -329,6 +331,53 @@ void UCIHandler::cmd_perft(std::istringstream& is) {
     std::cout << "Nodes: " << nodes << std::endl;
     std::cout << "Time: " << elapsed << " ms" << std::endl;
     std::cout << "NPS: " << nps << std::endl;
+}
+
+void UCIHandler::cmd_divide(std::istringstream& is) {
+    int depth;
+    is >> depth;
+
+    std::cout << "Divide depth " << depth << std::endl;
+
+    auto start = std::chrono::steady_clock::now();
+    U64 totalNodes = 0;
+
+    MoveList moves;
+    MoveGen::generate_all(board, moves);
+
+    // Reuse perft lambda logic (re-defined here for simplicity)
+    std::function<U64(Board&, int)> perft_recursive = [&](Board& b, int d) -> U64 {
+        if (d == 0) return 1;
+        U64 nodes = 0;
+        MoveList mvs;
+        MoveGen::generate_all(b, mvs);
+        for (int i = 0; i < mvs.size(); ++i) {
+            Move m = mvs[i].move;
+            if (!MoveGen::is_legal(b, m)) continue;
+            StateInfo si;
+            b.do_move(m, si);
+            nodes += perft_recursive(b, d - 1);
+            b.undo_move(m);
+        }
+        return nodes;
+    };
+
+    for (int i = 0; i < moves.size(); ++i) {
+        Move m = moves[i].move;
+        if (!MoveGen::is_legal(board, m)) continue;
+
+        StateInfo si;
+        board.do_move(m, si);
+        U64 nodes = perft_recursive(board, depth - 1);
+        board.undo_move(m);
+
+        std::cout << move_to_string(m) << ": " << nodes << std::endl;
+        totalNodes += nodes;
+    }
+
+    auto end = std::chrono::steady_clock::now();
+    std::cout << "\nNodes: " << totalNodes << std::endl;
+    std::cout << "Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms" << std::endl;
 }
 
 void UCIHandler::cmd_d() {
