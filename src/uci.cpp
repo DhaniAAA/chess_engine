@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include "tuning.hpp"
 
 namespace UCI {
 
@@ -97,6 +98,20 @@ void UCIHandler::cmd_uci() {
     std::cout << "option name OwnBook type check default true" << std::endl;
     std::cout << "option name Book File type string default book.bin" << std::endl;
     std::cout << "option name SyzygyPath type string default <empty>" << std::endl;
+
+    // Tuning Options (SPSA)
+    std::cout << "option name PawnValueMG type spin default " << Tuning::PawnValue.mg << " min 0 max 2000" << std::endl;
+    std::cout << "option name PawnValueEG type spin default " << Tuning::PawnValue.eg << " min 0 max 2000" << std::endl;
+    std::cout << "option name KnightValueMG type spin default " << Tuning::KnightValue.mg << " min 0 max 2000" << std::endl;
+    std::cout << "option name KnightValueEG type spin default " << Tuning::KnightValue.eg << " min 0 max 2000" << std::endl;
+    std::cout << "option name BishopValueMG type spin default " << Tuning::BishopValue.mg << " min 0 max 2000" << std::endl;
+    std::cout << "option name BishopValueEG type spin default " << Tuning::BishopValue.eg << " min 0 max 2000" << std::endl;
+    std::cout << "option name RookValueMG type spin default " << Tuning::RookValue.mg << " min 0 max 2000" << std::endl;
+    std::cout << "option name RookValueEG type spin default " << Tuning::RookValue.eg << " min 0 max 2000" << std::endl;
+    std::cout << "option name QueenValueMG type spin default " << Tuning::QueenValue.mg << " min 0 max 5000" << std::endl;
+    std::cout << "option name QueenValueEG type spin default " << Tuning::QueenValue.eg << " min 0 max 5000" << std::endl;
+    std::cout << "option name RookOpenFileBonusMG type spin default " << Tuning::RookOpenFileBonus.mg << " min 0 max 500" << std::endl;
+    std::cout << "option name RookOpenFileBonusEG type spin default " << Tuning::RookOpenFileBonus.eg << " min 0 max 500" << std::endl;
     std::cout << std::endl;
 
     std::cout << "uciok" << std::endl;
@@ -294,6 +309,19 @@ void UCIHandler::cmd_setoption(std::istringstream& is) {
         options.syzygyPath = value;
         Tablebase::TB.init(value);
     }
+    // Tuning Options (SPSA)
+    else if (name == "PawnValueMG") Tuning::PawnValue.mg = std::stoi(value);
+    else if (name == "PawnValueEG") Tuning::PawnValue.eg = std::stoi(value);
+    else if (name == "KnightValueMG") Tuning::KnightValue.mg = std::stoi(value);
+    else if (name == "KnightValueEG") Tuning::KnightValue.eg = std::stoi(value);
+    else if (name == "BishopValueMG") Tuning::BishopValue.mg = std::stoi(value);
+    else if (name == "BishopValueEG") Tuning::BishopValue.eg = std::stoi(value);
+    else if (name == "RookValueMG") Tuning::RookValue.mg = std::stoi(value);
+    else if (name == "RookValueEG") Tuning::RookValue.eg = std::stoi(value);
+    else if (name == "QueenValueMG") Tuning::QueenValue.mg = std::stoi(value);
+    else if (name == "QueenValueEG") Tuning::QueenValue.eg = std::stoi(value);
+    else if (name == "RookOpenFileBonusMG") Tuning::RookOpenFileBonus.mg = std::stoi(value);
+    else if (name == "RookOpenFileBonusEG") Tuning::RookOpenFileBonus.eg = std::stoi(value);
 }
 
 void UCIHandler::cmd_perft(std::istringstream& is) {

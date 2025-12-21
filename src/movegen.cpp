@@ -315,8 +315,31 @@ bool MoveGen::is_legal(const Board& board, Move m) {
 
     // King moves
     if (type_of(board.piece_on(from)) == KING) {
-        // For castling, validity is checked during generation
+        // For castling, validity is checked during generation, BUT we must re-verify for TT moves
         if (m.is_castling()) {
+            if (board.in_check()) return false;
+
+            if (us == WHITE) {
+                if (to == SQ_G1) { // OO
+                    if (!(board.castling_rights() & WHITE_OO)) return false;
+                    if (board.pieces() & (square_bb(SQ_F1) | square_bb(SQ_G1))) return false;
+                    if (board.is_attacked_by(them, SQ_F1) || board.is_attacked_by(them, SQ_G1)) return false;
+                } else if (to == SQ_C1) { // OOO
+                    if (!(board.castling_rights() & WHITE_OOO)) return false;
+                    if (board.pieces() & (square_bb(SQ_D1) | square_bb(SQ_C1) | square_bb(SQ_B1))) return false;
+                    if (board.is_attacked_by(them, SQ_D1) || board.is_attacked_by(them, SQ_C1)) return false;
+                } else return false;
+            } else {
+                if (to == SQ_G8) { // oo
+                    if (!(board.castling_rights() & BLACK_OO)) return false;
+                    if (board.pieces() & (square_bb(SQ_F8) | square_bb(SQ_G8))) return false;
+                    if (board.is_attacked_by(them, SQ_F8) || board.is_attacked_by(them, SQ_G8)) return false;
+                } else if (to == SQ_C8) { // ooo
+                    if (!(board.castling_rights() & BLACK_OOO)) return false;
+                    if (board.pieces() & (square_bb(SQ_D8) | square_bb(SQ_C8) | square_bb(SQ_B8))) return false;
+                    if (board.is_attacked_by(them, SQ_D8) || board.is_attacked_by(them, SQ_C8)) return false;
+                } else return false;
+            }
             return true;
         }
         // Regular king move - check if destination is attacked by enemy
@@ -464,8 +487,18 @@ bool MoveGen::is_pseudo_legal(const Board& board, Move m) {
     }
 
     if (m.is_castling()) {
-        // Basic castling check - detailed check done in generation
-        return pt == KING && !board.in_check();
+        if (pt != KING) return false;
+        if (board.in_check()) return false;
+
+        // Check rights and occlusion
+        if (us == WHITE) {
+            if (to == SQ_G1) return (board.castling_rights() & WHITE_OO) && !(board.pieces() & (square_bb(SQ_F1) | square_bb(SQ_G1)));
+            if (to == SQ_C1) return (board.castling_rights() & WHITE_OOO) && !(board.pieces() & (square_bb(SQ_D1) | square_bb(SQ_C1) | square_bb(SQ_B1)));
+        } else {
+            if (to == SQ_G8) return (board.castling_rights() & BLACK_OO) && !(board.pieces() & (square_bb(SQ_F8) | square_bb(SQ_G8)));
+            if (to == SQ_C8) return (board.castling_rights() & BLACK_OOO) && !(board.pieces() & (square_bb(SQ_D8) | square_bb(SQ_C8) | square_bb(SQ_B8)));
+        }
+        return false;
     }
 
     // Normal piece moves

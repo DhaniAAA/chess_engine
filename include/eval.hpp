@@ -4,18 +4,7 @@
 #include "board.hpp"
 #include "magic.hpp"
 #include <algorithm>
-
-// ============================================================================
-// Advanced Hand-Crafted Evaluation Function (TAHAP 4)
-//
-// Features:
-// - Material with baseline values
-// - Piece-Square Tables (Middlegame and Endgame)
-// - Tapered Evaluation (interpolate between MG and EG)
-// - Pawn Structure (passed, isolated, doubled, backward, connected)
-// - Piece Activity (mobility, outposts, rooks on open files)
-// - King Safety (pawn shield, attack zones, tropism)
-// ============================================================================
+#include "tuning.hpp"
 
 namespace Eval {
 
@@ -23,49 +12,17 @@ namespace Eval {
 // Evaluation Score Structure (MG and EG packed)
 // ============================================================================
 
-struct EvalScore {
-    int mg;  // Middlegame score
-    int eg;  // Endgame score
-
-    constexpr EvalScore() : mg(0), eg(0) {}
-    constexpr EvalScore(int m, int e) : mg(m), eg(e) {}
-
-    constexpr EvalScore operator+(const EvalScore& other) const {
-        return EvalScore(mg + other.mg, eg + other.eg);
-    }
-    constexpr EvalScore operator-(const EvalScore& other) const {
-        return EvalScore(mg - other.mg, eg - other.eg);
-    }
-    constexpr EvalScore operator-() const {
-        return EvalScore(-mg, -eg);
-    }
-    EvalScore& operator+=(const EvalScore& other) {
-        mg += other.mg;
-        eg += other.eg;
-        return *this;
-    }
-    EvalScore& operator-=(const EvalScore& other) {
-        mg -= other.mg;
-        eg -= other.eg;
-        return *this;
-    }
-    constexpr EvalScore operator*(int n) const {
-        return EvalScore(mg * n, eg * n);
-    }
-};
-
-// Shorthand for creating scores
-constexpr EvalScore S(int mg, int eg) { return EvalScore(mg, eg); }
+// EvalScore structure and S helper moved to types.hpp
 
 // ============================================================================
 // Material Values (MG, EG)
 // ============================================================================
 
-constexpr EvalScore PawnValue   = S(100, 120);
-constexpr EvalScore KnightValue = S(320, 300);
-constexpr EvalScore BishopValue = S(330, 320);
-constexpr EvalScore RookValue   = S(500, 550);
-constexpr EvalScore QueenValue  = S(950, 1000);
+    using Tuning::PawnValue;
+    using Tuning::KnightValue;
+    using Tuning::BishopValue;
+    using Tuning::RookValue;
+    using Tuning::QueenValue;
 
 // Game phase values for tapered evaluation
 constexpr int PhaseValue[PIECE_TYPE_NB] = { 0, 0, 1, 1, 2, 4, 0 };
@@ -168,18 +125,18 @@ constexpr EvalScore PassedPawnBonus[8] = {
     S(  0,   0), S(  5,  10), S( 10,  20), S( 20,  40),
     S( 40,  75), S( 70, 120), S(100, 180), S(  0,   0)
 };
-constexpr EvalScore IsolatedPawnPenalty   = S(-15, -20);
-constexpr EvalScore DoubledPawnPenalty    = S(-10, -25);
-constexpr EvalScore BackwardPawnPenalty   = S(-10, -15);
-constexpr EvalScore ConnectedPawnBonus    = S( 10,  10);
-constexpr EvalScore PhalanxBonus          = S( 10,  15);
+    using Tuning::IsolatedPawnPenalty;
+    using Tuning::DoubledPawnPenalty;
+    using Tuning::BackwardPawnPenalty;
+    using Tuning::ConnectedPawnBonus;
+    using Tuning::PhalanxBonus;
 
 // Piece activity
-constexpr EvalScore BishopPairBonus       = S( 35,  55);
-constexpr EvalScore RookOpenFileBonus     = S( 25,  15);
-constexpr EvalScore RookSemiOpenFileBonus = S( 12,   8);
-constexpr EvalScore RookOnSeventhBonus    = S( 20,  40);
-constexpr EvalScore KnightOutpostBonus    = S( 30,  20);
+    using Tuning::BishopPairBonus;
+    using Tuning::RookOpenFileBonus;
+    using Tuning::RookSemiOpenFileBonus;
+    using Tuning::RookOnSeventhBonus;
+    using Tuning::KnightOutpostBonus;
 
 // Mobility bonus per square
 constexpr EvalScore KnightMobility[9] = {

@@ -235,4 +235,42 @@ inline Square string_to_square(const std::string& str) {
     return make_square(f, r);
 }
 
+// ============================================================================
+// Evaluation Score
+// ============================================================================
+
+struct EvalScore {
+    int mg;  // Middlegame score
+    int eg;  // Endgame score
+
+    constexpr EvalScore() : mg(0), eg(0) {}
+    constexpr EvalScore(int m, int e) : mg(m), eg(e) {}
+
+    constexpr EvalScore operator+(const EvalScore& other) const {
+        return EvalScore(mg + other.mg, eg + other.eg);
+    }
+    constexpr EvalScore operator-(const EvalScore& other) const {
+        return EvalScore(mg - other.mg, eg - other.eg);
+    }
+    constexpr EvalScore operator-() const {
+        return EvalScore(-mg, -eg);
+    }
+    EvalScore& operator+=(const EvalScore& other) {
+        mg += other.mg;
+        eg += other.eg;
+        return *this;
+    }
+    EvalScore& operator-=(const EvalScore& other) {
+        mg -= other.mg;
+        eg -= other.eg;
+        return *this;
+    }
+    constexpr EvalScore operator*(int n) const {
+        return EvalScore(mg * n, eg * n);
+    }
+};
+
+// Shorthand for creating scores
+constexpr EvalScore S(int mg, int eg) { return EvalScore(mg, eg); }
+
 #endif // TYPES_HPP
