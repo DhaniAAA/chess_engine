@@ -19,10 +19,13 @@ TranspositionTable::TranspositionTable()
 
 TranspositionTable::~TranspositionTable() {
     if (table) {
+#ifdef _WIN32
+        _aligned_free(table); // [PERBAIKAN] Gunakan _aligned_free di Windows
+#else
         std::free(table);
+#endif
     }
 }
-
 // ============================================================================
 // Resize
 // ============================================================================

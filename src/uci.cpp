@@ -7,6 +7,7 @@
 #include <chrono>
 #include <functional>
 #include "tuning.hpp"
+#include <fstream>
 
 namespace UCI {
 
@@ -44,9 +45,14 @@ UCIHandler::~UCIHandler() {
 void UCIHandler::loop() {
     std::string line, token;
 
-    while (std::getline(std::cin, line)) {
-        std::istringstream is(line);
+    // Buka file log untuk mencatat komunikasi
+    std::ofstream logFile("debug_log.txt", std::ios::app);
+    logFile << "=== Engine Started ===" << std::endl;
 
+    while (std::getline(std::cin, line)) {
+        logFile << "GUI: " << line << std::endl; // Catat apa yang dikirim GUI
+
+        std::istringstream is(line);
         is >> std::skipws >> token;
 
         if (token.empty()) continue;
@@ -115,10 +121,12 @@ void UCIHandler::cmd_uci() {
     std::cout << std::endl;
 
     std::cout << "uciok" << std::endl;
+    std::cout.flush();  // [PERBAIKAN] Force flush untuk memastikan uciok terkirim
 }
 
 void UCIHandler::cmd_isready() {
     std::cout << "readyok" << std::endl;
+    std::cout.flush();  // [PERBAIKAN] Force flush untuk memastikan readyok terkirim
 }
 
 void UCIHandler::cmd_ucinewgame() {
@@ -252,6 +260,7 @@ void UCIHandler::start_search(const SearchLimits& limits) {
             std::cout << " ponder " << move_to_string(ponderMove);
         }
         std::cout << std::endl;
+        std::cout.flush();  // [PERBAIKAN] Force flush bestmove
 
         searching = false;
     });
