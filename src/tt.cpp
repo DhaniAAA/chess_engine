@@ -40,8 +40,19 @@ void TranspositionTable::resize(size_t mb) {
         table = nullptr;
     }
 
-    // Calculate number of clusters
-    clusterCount = mb * 1024 * 1024 / sizeof(TTCluster);
+    // --- PERBAIKAN MULAI ---
+    // Hitung target ukuran dalam bytes
+    size_t sizeBytes = mb * 1024 * 1024;
+
+    // Hitung estimasi jumlah cluster maksimal
+    size_t targetCount = sizeBytes / sizeof(TTCluster);
+
+    // Round down to nearest Power of 2 (Bulatkan ke bawah ke pangkat 2 terdekat)
+    // Ini PENTING agar operasi bitwise '&' tidak crash
+    clusterCount = 1;
+    while (clusterCount * 2 <= targetCount) {
+        clusterCount *= 2;
+    }
 
     // Allocate aligned memory for cache efficiency
 #ifdef _WIN32
@@ -51,18 +62,12 @@ void TranspositionTable::resize(size_t mb) {
 #endif
 
     if (!table) {
-        std::cerr << "Failed to allocate " << mb << "MB for transposition table\n";
+        std::cerr << "Failed to allocate transposition table\n";
         clusterCount = 0;
         return;
     }
 
     clear();
-
-    // [PERBAIKAN] Output ini dikomentari karena mengganggu protokol UCI.
-    // GUI mengharapkan engine diam sampai menerima perintah "uci".
-    // std::cout << "Transposition table: " << mb << " MB, "
-    //           << clusterCount << " clusters, "
-    //           << (clusterCount * TTCluster::ENTRIES_PER_CLUSTER) << " entries\n";
 }
 
 // ============================================================================

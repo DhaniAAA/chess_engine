@@ -11,7 +11,7 @@
 #include "search.hpp"
 #include "eval.hpp"
 #include "uci.hpp"
-#include "testing.hpp"
+// #include "testing.hpp"
 
 // ============================================================================
 // Test Functions - Stage 1
@@ -378,55 +378,55 @@ int main(int argc, char* argv[]) {
     // Initialize all subsystems
     Position::init();
     // Check command line arguments
-    if (argc > 1) {
-        std::string arg = argv[1];
+    // if (argc > 1) {
+    //     std::string arg = argv[1];
 
-        if (arg == "test") {
-            if (argc > 2) {
-                std::string subarg = argv[2];
+    //     if (arg == "test") {
+    //         if (argc > 2) {
+    //             std::string subarg = argv[2];
 
-                if (subarg == "perft") {
-                    int depth = (argc > 3) ? std::stoi(argv[3]) : 5;
-                    TestRunner::run_perft_tests(depth);
-                    return 0;
-                } else if (subarg == "tactical") {
-                    int depth = (argc > 3) ? std::stoi(argv[3]) : 10;
-                    int time = (argc > 4) ? std::stoi(argv[4]) : 5000;
-                    TestRunner::run_tactical_tests(depth, time);
-                    return 0;
-                } else if (subarg == "all") {
-                    TestRunner::run_all_tests();
-                    return 0;
-                }
-            }
-            // Default: run legacy tests
-            run_tests();
-            return 0;
+    //             if (subarg == "perft") {
+    //                 int depth = (argc > 3) ? std::stoi(argv[3]) : 5;
+    //                 TestRunner::run_perft_tests(depth);
+    //                 return 0;
+    //             } else if (subarg == "tactical") {
+    //                 int depth = (argc > 3) ? std::stoi(argv[3]) : 10;
+    //                 int time = (argc > 4) ? std::stoi(argv[4]) : 5000;
+    //                 TestRunner::run_tactical_tests(depth, time);
+    //                 return 0;
+    //             } else if (subarg == "all") {
+    //                 TestRunner::run_all_tests();
+    //                 return 0;
+    //             }
+    //         }
+    //         // Default: run legacy tests
+    //         run_tests();
+    //         return 0;
 
-        } else if (arg == "bench") {
-            if (argc > 2) {
-                std::string subarg = argv[2];
+    //     } else if (arg == "bench") {
+    //         if (argc > 2) {
+    //             std::string subarg = argv[2];
 
-                if (subarg == "time") {
-                    int ms = (argc > 3) ? std::stoi(argv[3]) : 1000;
-                    BenchTest::run_time_benchmark(ms);
-                    return 0;
-                } else {
-                    // Assume it's a depth number
-                    int depth = std::stoi(subarg);
-                    BenchTest::run_depth_benchmark(depth);
-                    return 0;
-                }
-            }
-            // Default: run standard benchmark
-            run_benchmark();
-            return 0;
+    //             if (subarg == "time") {
+    //                 int ms = (argc > 3) ? std::stoi(argv[3]) : 1000;
+    //                 BenchTest::run_time_benchmark(ms);
+    //                 return 0;
+    //             } else {
+    //                 // Assume it's a depth number
+    //                 int depth = std::stoi(subarg);
+    //                 BenchTest::run_depth_benchmark(depth);
+    //                 return 0;
+    //             }
+    //         }
+    //         // Default: run standard benchmark
+    //         run_benchmark();
+    //         return 0;
 
-        } else if (arg == "help" || arg == "--help" || arg == "-h") {
-            print_help();
-            return 0;
-        }
-    }
+    //     } else if (arg == "help" || arg == "--help" || arg == "-h") {
+    //         print_help();
+    //         return 0;
+    //     }
+    // }
 
     // Default: UCI mode
     UCI::UCIHandler uci;

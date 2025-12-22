@@ -428,82 +428,72 @@ inline EvalScore eval_king_safety(const Board& board, Color c) {
     Square kingSq = board.king_square(c);
     Bitboard occupied = board.pieces();
 
-    // Calculate attack units
+    // King zone (3x3 area around king)
+    Bitboard kingZone = king_attacks_bb(kingSq) | square_bb(kingSq);
+
+    // Get all enemy attacks on king zone using pre-computed attack bitboards
+    // This is faster than looping through each piece individually
+    Bitboard enemyPieces = board.pieces(enemy);
+
     int attackUnits = 0;
     int attackCount = 0;
 
-    // King zone (3x3 area around king)
-    Bitboard kingZone = king_attacks_bb(kingSq);
-    kingZone |= square_bb(kingSq);
-
-    // Enemy knights attacking king zone
-    Bitboard bb = board.pieces(enemy, KNIGHT);
-    while (bb) {
-        Square sq = pop_lsb(bb);
+    // Count attacks by piece type (optimized - avoid per-piece loop)
+    Bitboard knightAttackers = board.pieces(enemy, KNIGHT);
+    while (knightAttackers) {
+        Square sq = pop_lsb(knightAttackers);
         if (knight_attacks_bb(sq) & kingZone) {
             attackUnits += KnightAttackWeight;
             attackCount++;
         }
     }
 
-    // Enemy bishops attacking king zone
-    bb = board.pieces(enemy, BISHOP);
-    while (bb) {
-        Square sq = pop_lsb(bb);
-        if (bishop_attacks_bb(sq, occupied) & kingZone) {
-            attackUnits += BishopAttackWeight;
-            attackCount++;
+    // Sliders - only compute if there are relevant pieces
+    Bitboard bishopQueens = board.pieces(enemy, BISHOP, QUEEN);
+    Bitboard rookQueens = board.pieces(enemy, ROOK, QUEEN);
+
+    if (bishopQueens) {
+        Bitboard bishopAttacks = bishop_attacks_bb(kingSq, occupied);
+        Bitboard attackers = bishopAttacks & bishopQueens;
+        int count = popcount(attackers);
+        if (count) {
+            attackUnits += count * BishopAttackWeight;
+            attackCount += count;
         }
     }
 
-    // Enemy rooks attacking king zone
-    bb = board.pieces(enemy, ROOK);
-    while (bb) {
-        Square sq = pop_lsb(bb);
-        if (rook_attacks_bb(sq, occupied) & kingZone) {
-            attackUnits += RookAttackWeight;
-            attackCount++;
+    if (rookQueens) {
+        Bitboard rookAttacks = rook_attacks_bb(kingSq, occupied);
+        Bitboard attackers = rookAttacks & rookQueens;
+        int count = popcount(attackers);
+        if (count) {
+            attackUnits += count * RookAttackWeight;
+            attackCount += count;
         }
     }
 
-    // Enemy queens attacking king zone
-    bb = board.pieces(enemy, QUEEN);
-    while (bb) {
-        Square sq = pop_lsb(bb);
-        if (queen_attacks_bb(sq, occupied) & kingZone) {
-            attackUnits += QueenAttackWeight;
-            attackCount++;
-        }
-    }
-
-    // Only apply king safety if there are enough attackers
+    // Only apply king safety penalty if there are enough attackers
     if (attackCount >= 2) {
         int safetyPenalty = KingSafetyTable[std::min(attackUnits, 99)];
         score.mg -= safetyPenalty;
     }
 
-    // Pawn shield evaluation (for castled king)
+    // Pawn shield evaluation (for castled king) - simplified
     Rank kingRank = c == WHITE ? rank_of(kingSq) : Rank(RANK_8 - rank_of(kingSq));
     if (kingRank <= RANK_2) {
         File kingFile = file_of(kingSq);
         Bitboard ourPawns = board.pieces(c, PAWN);
-        int shieldCount = 0;
+        Bitboard shieldZone = c == WHITE ?
+            (rank_bb_eval(RANK_2) | rank_bb_eval(RANK_3)) :
+            (rank_bb_eval(RANK_6) | rank_bb_eval(RANK_7));
 
-        // Check pawns in front of king
-        for (int df = -1; df <= 1; df++) {
-            int newFile = kingFile + df;
-            if (newFile >= FILE_A && newFile <= FILE_H) {
-                File f = File(newFile);
-                Bitboard shieldPawn = file_bb(f) & ourPawns;
-                // Check if there's a pawn on rank 2 or 3 in front of king
-                Bitboard shieldZone = c == WHITE ?
-                    (rank_bb_eval(RANK_2) | rank_bb_eval(RANK_3)) :
-                    (rank_bb_eval(RANK_6) | rank_bb_eval(RANK_7));
-                if (shieldPawn & shieldZone) {
-                    shieldCount++;
-                }
-            }
-        }
+        // Count pawns in front of king (optimized)
+        Bitboard shieldMask = 0;
+        if (kingFile > FILE_A) shieldMask |= file_bb(File(kingFile - 1));
+        shieldMask |= file_bb(kingFile);
+        if (kingFile < FILE_H) shieldMask |= file_bb(File(kingFile + 1));
+
+        int shieldCount = popcount(shieldMask & shieldZone & ourPawns);
         score.mg += PawnShieldBonus[std::min(shieldCount, 3)];
     }
 

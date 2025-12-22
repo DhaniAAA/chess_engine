@@ -2,83 +2,32 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build",
-            "type": "shell",
+            "type": "cppbuild",
+            "label": "Build Release (FAST)",
+            "command": "C:\\mingw32\\bin\\g++.exe", // Sesuaikan path compiler Anda
+            "args": [
+                "-fdiagnostics-color=always",
+                "-std=c++17",
+                "-O3",            // <--- KUNCI KECEPATAN (Optimization Level 3)
+                "-DNDEBUG",       // <--- Matikan fitur debug yang berat
+                "-march=native",  // <--- Optimalkan untuk CPU Anda
+                "-Wall",
+                "-I${workspaceFolder}/include",
+                "${workspaceFolder}/src/*.cpp",
+                "-o",
+                "${workspaceFolder}/output/main.exe"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
-            "windows": {
-                "command": "powershell",
-                "args": [
-                    "-c",
-                    "mingw32-make"
-                ]
-            },
-            "linux": {
-                "command": "bash",
-                "args": [
-                    "-c",
-                    "make"
-                ]
-            },
-            "osx": {
-                "command": "bash",
-                "args": [
-                    "-c",
-                    "make"
-                ]
-            }
-        },
-        {
-            "label": "build & run",
-            "type": "shell",
-            "windows": {
-                "command": "powershell",
-                "args": [
-                    "-c",
-                    "'mingw32-make run'"
-                ]
-            },
-            "linux": {
-                "command": "bash",
-                "args": [
-                    "-c",
-                    "'make run'"
-                ]
-            },
-            "osx": {
-                "command": "bash",
-                "args": [
-                    "-c",
-                    "'make run'"
-                ]
-            }
-        },
-        {
-            "label": "clean",
-            "type": "shell",
-            "windows": {
-                "command": "powershell",
-                "args": [
-                    "-c",
-                    "'mingw32-make clean'"
-                ]
-            },
-            "linux": {
-                "command": "bash",
-                "args": [
-                    "-c",
-                    "'make clean'"
-                ]
-            },
-            "osx": {
-                "command": "bash",
-                "args": [
-                    "-c",
-                    "'make clean'"
-                ]
-            }
+            "detail": "Compiler optimized for speed"
         }
     ]
 }
