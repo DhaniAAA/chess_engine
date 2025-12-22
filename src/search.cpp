@@ -6,6 +6,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 
 // ============================================================================
 // Global Search Instance
@@ -212,8 +213,10 @@ void Search::iterative_deepening(Board& board) {
         return;  // No legal moves
     }
 
+    // [PERBAIKAN] Set fallback move ke move legal pertama
+    rootBestMove = rootMoves[0].move;
+
     if (rootMoves.size() == 1 && !limits.infinite) {
-        rootBestMove = rootMoves[0].move;
         return;  // Only one legal move
     }
 
@@ -250,7 +253,10 @@ void Search::iterative_deepening(Board& board) {
         }
 
         if (!stopped) {
-            rootBestMove = pvLines[0].moves[0];
+            // [PERBAIKAN] Hanya update jika PV tidak kosong
+            if (pvLines[0].length > 0 && pvLines[0].moves[0] != MOVE_NONE) {
+                rootBestMove = pvLines[0].moves[0];
+            }
             // Get ponder move (2nd move in PV)
             rootPonderMove = (pvLines[0].length > 1) ? pvLines[0].moves[1] : MOVE_NONE;
             report_info(rootDepth, score, pvLines[0]);
@@ -261,13 +267,16 @@ void Search::iterative_deepening(Board& board) {
             }
 
             // Time management - check if we should stop early
-            auto now = std::chrono::steady_clock::now();
-            int elapsed = static_cast<int>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count()
-            );
+            // [PERBAIKAN] Jangan stop early untuk infinite search
+            if (!limits.infinite && limits.movetime == 0) {
+                auto now = std::chrono::steady_clock::now();
+                int elapsed = static_cast<int>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count()
+                );
 
-            if (elapsed > optimumTime / 2) {
-                break;  // Used more than half of optimum time
+                if (elapsed > optimumTime / 2) {
+                    break;  // Used more than half of optimum time
+                }
             }
         }
     }
@@ -828,6 +837,14 @@ void Search::report_info(int depth, int score, const PVLine& pv) {
     std::cout << " hashfull " << TT.hashfull();
     std::cout << " pv " << pv.to_string();
     std::cout << std::endl;
+    std::cout.flush();
+
+    // [DEBUG] Log info to file
+    std::ofstream logFile("debug_log.txt", std::ios::app);
+    if (logFile.is_open()) {
+        logFile << "ENGINE INFO: depth " << depth << " score " << score << " nodes " << searchStats.nodes << std::endl;
+        logFile.close();
+    }
 
     if (infoCallback) {
         SearchInfo info;

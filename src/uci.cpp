@@ -35,7 +35,9 @@ static StateInfo stateInfoStack[512];
 static int stateStackIdx = 0;
 
 UCIHandler::UCIHandler() : searching(false) {
-    // Board default constructor sets up startpos
+    // Gunakan stateInfoStack untuk inisialisasi aman
+    stateStackIdx = 0;
+    board.set(Board::StartFEN, &stateInfoStack[stateStackIdx]);
 }
 
 UCIHandler::~UCIHandler() {
@@ -48,9 +50,11 @@ void UCIHandler::loop() {
     // Buka file log untuk mencatat komunikasi
     std::ofstream logFile("debug_log.txt", std::ios::app);
     logFile << "=== Engine Started ===" << std::endl;
+    logFile.flush();
 
     while (std::getline(std::cin, line)) {
-        logFile << "GUI: " << line << std::endl; // Catat apa yang dikirim GUI
+        logFile << "GUI: " << line << std::endl;
+        logFile.flush();
 
         std::istringstream is(line);
         is >> std::skipws >> token;
@@ -58,17 +62,33 @@ void UCIHandler::loop() {
         if (token.empty()) continue;
 
         if (token == "uci") {
+            logFile << "ENGINE: Sending uci response..." << std::endl;
+            logFile.flush();
             cmd_uci();
+            logFile << "ENGINE: uciok sent" << std::endl;
+            logFile.flush();
         } else if (token == "isready") {
+            logFile << "ENGINE: Sending readyok..." << std::endl;
+            logFile.flush();
             cmd_isready();
+            logFile << "ENGINE: readyok sent" << std::endl;
+            logFile.flush();
         } else if (token == "ucinewgame") {
             cmd_ucinewgame();
         } else if (token == "position") {
             cmd_position(is);
         } else if (token == "go") {
+            logFile << "ENGINE: Starting search..." << std::endl;
+            logFile.flush();
             cmd_go(is);
+            logFile << "ENGINE: Search started in thread" << std::endl;
+            logFile.flush();
         } else if (token == "stop") {
+            logFile << "ENGINE: Stopping search..." << std::endl;
+            logFile.flush();
             cmd_stop();
+            logFile << "ENGINE: Search stopped" << std::endl;
+            logFile.flush();
         } else if (token == "quit") {
             cmd_quit();
             break;
@@ -133,7 +153,7 @@ void UCIHandler::cmd_ucinewgame() {
     wait_for_search();
     TT.clear();
     stateStackIdx = 0;
-    board = Board();  // Reset to startpos
+    board.set(Board::StartFEN, &stateInfoStack[stateStackIdx]);  // [PERBAIKAN] Gunakan set() agar pointer st aman
     Searcher.clear_history();
     Threads.clear_all_history();  // Clear all thread histories
 }
@@ -147,14 +167,14 @@ void UCIHandler::cmd_position(std::istringstream& is) {
     stateStackIdx = 0;  // Reset state stack
 
     if (token == "startpos") {
-        board = Board();  // Reset to starting position
+        board.set(Board::StartFEN, &stateInfoStack[stateStackIdx]);  // [PERBAIKAN] Gunakan set()
         is >> token;  // Consume "moves" if present
     } else if (token == "fen") {
         std::string fen;
         while (is >> token && token != "moves") {
             fen += token + " ";
         }
-        board = Board(fen);
+        board.set(fen, &stateInfoStack[stateStackIdx]); // [PERBAIKAN] Gunakan set()
     }
 
     // Parse moves
@@ -261,6 +281,13 @@ void UCIHandler::start_search(const SearchLimits& limits) {
         }
         std::cout << std::endl;
         std::cout.flush();  // [PERBAIKAN] Force flush bestmove
+
+        // [DEBUG] Log bestmove to file
+        std::ofstream logFile("debug_log.txt", std::ios::app);
+        if (logFile.is_open()) {
+            logFile << "ENGINE BESTMOVE: " << move_to_string(bestMove) << std::endl;
+            logFile.close();
+        }
 
         searching = false;
     });
