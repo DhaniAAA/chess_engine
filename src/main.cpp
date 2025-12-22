@@ -64,7 +64,6 @@ void test_move_generation() {
     std::cout << "\n\n";
 
     // Test position with en passant
-    StateInfo si;
     Board ep_pos("rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3");
     std::cout << "Position with en passant:\n";
     std::cout << ep_pos.pretty();
@@ -111,7 +110,6 @@ void test_see() {
     std::cout << "=== Testing Static Exchange Evaluation ===\n\n";
 
     // Position where Rxd5 is winning (pawn takes rook, but we recapture)
-    StateInfo si;
     Board pos("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1");
     std::cout << pos.pretty();
 
@@ -374,9 +372,11 @@ void print_help() {
 }
 
 int main(int argc, char* argv[]) {
+    // [PERBAIKAN] Tambahkan baris ini AGAR EN CROISSANT TIDAK LOADING TERUS
+    std::cout.setf(std::ios::unitbuf);
+
     // Initialize all subsystems
     Position::init();
-
     // Check command line arguments
     if (argc > 1) {
         std::string arg = argv[1];

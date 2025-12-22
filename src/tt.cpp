@@ -51,9 +51,11 @@ void TranspositionTable::resize(size_t mb) {
 
     clear();
 
-    std::cout << "Transposition table: " << mb << " MB, "
-              << clusterCount << " clusters, "
-              << (clusterCount * TTCluster::ENTRIES_PER_CLUSTER) << " entries\n";
+    // [PERBAIKAN] Output ini dikomentari karena mengganggu protokol UCI.
+    // GUI mengharapkan engine diam sampai menerima perintah "uci".
+    // std::cout << "Transposition table: " << mb << " MB, "
+    //           << clusterCount << " clusters, "
+    //           << (clusterCount * TTCluster::ENTRIES_PER_CLUSTER) << " entries\n";
 }
 
 // ============================================================================

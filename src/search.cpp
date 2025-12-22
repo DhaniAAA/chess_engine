@@ -279,7 +279,7 @@ void Search::iterative_deepening(Board& board) {
 
 int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     const bool pvNode = (beta - alpha) > 1;
-    const bool rootNode = (stack[2].ply == -2);  // Adjusted for stack offset
+    // rootNode removed - was unused (warning fix)
 
     // Update selective depth
     int ply = board.game_ply();

@@ -34,7 +34,7 @@ constexpr int SINGULAR_MARGIN = 64;
 // SearchThread Implementation
 // ============================================================================
 
-SearchThread::SearchThread(int id) : threadId(id), rand_seed(id + 1) {
+SearchThread::SearchThread(int id) : rand_seed(id + 1), threadId(id) {
     // Initialize search stack
     for (int i = 0; i < MAX_PLY + 4; ++i) {
         stack[i].ply = i - 2;
