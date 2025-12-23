@@ -4,6 +4,7 @@
 #include "eval.hpp"
 #include "book.hpp"
 #include "tablebase.hpp"
+#include "search_constants.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cmath>
@@ -21,14 +22,8 @@ ThreadPool Threads;
 
 extern int LMRTable[64][64];
 
-// Pruning constants (same as search.cpp)
-constexpr int FutilityMargin[7] = { 0, 100, 200, 300, 400, 500, 600 };
-constexpr int RazorMargin[4] = { 0, 200, 400, 600 };
-constexpr int RFPMargin[7] = { 0, 80, 160, 240, 320, 400, 480 };
-constexpr int LMPThreshold[8] = { 0, 5, 8, 12, 17, 23, 30, 38 };
-constexpr int MAX_EXTENSIONS = 16;
-constexpr int SINGULAR_DEPTH = 6;
-constexpr int SINGULAR_MARGIN = 64;
+// Using shared search parameters from search_constants.hpp
+using namespace SearchParams;
 
 // ============================================================================
 // SearchThread Implementation

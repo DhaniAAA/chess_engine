@@ -58,7 +58,8 @@ SOURCES_ALL := $(wildcard $(patsubst %,%/*.cpp, $(SOURCEDIRS)))
 EXCLUDES    := src/testing.cpp \
                src/testing_benchmark.cpp \
                src/testing_regression.cpp \
-               src/testing_tactical.cpp
+               src/testing_tactical.cpp \
+               src/tests.cpp
 
 # Filter SOURCES_ALL untuk membuang file EXCLUDES
 SOURCES     := $(filter-out $(EXCLUDES), $(SOURCES_ALL))

@@ -4,6 +4,7 @@
 #include "book.hpp"
 #include "tablebase.hpp"
 #include "uci.hpp"
+#include "search_constants.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cmath>
@@ -33,39 +34,10 @@ void init_lmr_table() {
 }
 
 // ============================================================================
-// Pruning & Extension Constants (TAHAP 3)
+// Using Search Parameters from search_constants.hpp
 // ============================================================================
 
-// Futility pruning margins per depth
-// [PERBAIKAN] Increased margins to be more conservative
-constexpr int FutilityMargin[7] = { 0, 150, 300, 450, 600, 750, 900 };
-
-// Razoring margins per depth
-// [PERBAIKAN] Increased margins to avoid missing tactics
-constexpr int RazorMargin[4] = { 0, 300, 500, 700 };
-
-// Reverse futility pruning (static null move) margins
-constexpr int RFPMargin[7] = { 0, 80, 160, 240, 320, 400, 480 };
-
-// Late move pruning thresholds (skip quiet moves after this many tries at low depth)
-// [PERBAIKAN] Increased thresholds to avoid skipping tactical moves
-constexpr int LMPThreshold[8] = { 0, 8, 12, 18, 25, 33, 42, 52 };
-
-// Extension limits
-constexpr int MAX_EXTENSIONS = 16;
-
-// Multi-Cut parameters
-constexpr int MULTI_CUT_DEPTH = 5;
-constexpr int MULTI_CUT_COUNT = 3;   // Number of moves to try
-constexpr int MULTI_CUT_REQUIRED = 2; // Number of cutoffs required
-
-// Singular extension parameters
-constexpr int SINGULAR_DEPTH = 6;
-constexpr int SINGULAR_MARGIN = 64;   // Score margin for singularity
-
-// ProbCut parameters
-constexpr int PROBCUT_DEPTH = 5;      // Minimum depth for ProbCut
-constexpr int PROBCUT_MARGIN = 100;   // Score margin above beta
+using namespace SearchParams;
 
 // ============================================================================
 // Search Constructor
