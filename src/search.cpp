@@ -316,7 +316,22 @@ void Search::iterative_deepening(Board& board) {
             }
 
             // Get ponder move (2nd move in best PV)
-            rootPonderMove = (bestRM.pv.length > 1) ? bestRM.pv.moves[1] : MOVE_NONE;
+            // IMPORTANT: Ponder move must be validated in the position AFTER bestMove is played
+            rootPonderMove = MOVE_NONE;  // Default to no ponder
+            if (bestRM.pv.length > 1 && rootBestMove != MOVE_NONE) {
+                Move ponderCandidate = bestRM.pv.moves[1];
+                if (ponderCandidate != MOVE_NONE) {
+                    // Validate ponder move by making best move first
+                    StateInfo si;
+                    Board tempBoard = board;  // Copy board
+                    tempBoard.do_move(rootBestMove, si);
+
+                    // Check if ponder move is legal in the new position
+                    if (MoveGen::is_legal(tempBoard, ponderCandidate)) {
+                        rootPonderMove = ponderCandidate;
+                    }
+                }
+            }
 
             // Copy best PV to pvLines[0] for compatibility
             pvLines[0] = bestRM.pv;
@@ -383,8 +398,9 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         searchStats.selDepth = ply;
     }
 
-    // Check for time/node limits - check more frequently for responsiveness
-    if ((searchStats.nodes & 2047) == 0) {
+    // Check for time/node limits - check frequently for responsiveness
+    // Using 1023 (1024-1) for fast time controls
+    if ((searchStats.nodes & 1023) == 0) {
         check_time();
     }
 

@@ -265,13 +265,20 @@ void UCIHandler::start_search(const SearchLimits& limits) {
         Move bestMove = Searcher.best_move();
         std::cout << "bestmove " << move_to_string(bestMove);
 
-        // Output ponder move if available
+        // Output ponder move if available and valid
         Move ponderMove = Searcher.ponder_move();
-        if (ponderMove != MOVE_NONE) {
-            std::cout << " ponder " << move_to_string(ponderMove);
+        if (ponderMove != MOVE_NONE && bestMove != MOVE_NONE) {
+            // Final validation: make best move and check if ponder is legal
+            StateInfo si;
+            Board tempBoard = board;
+            tempBoard.do_move(bestMove, si);
+
+            if (MoveGen::is_legal(tempBoard, ponderMove)) {
+                std::cout << " ponder " << move_to_string(ponderMove);
+            }
         }
         std::cout << std::endl;
-        std::cout.flush();  // [PERBAIKAN] Force flush bestmove
+        std::cout.flush();  // Force flush bestmove
 
         searching = false;
     });

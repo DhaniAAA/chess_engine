@@ -284,8 +284,8 @@ bool should_stop(SearchThread* thread) {
     // Only main thread checks time
     if (!thread->is_main()) return false;
 
-    // Check every 2048 nodes
-    if ((thread->nodes & 2047) != 0) return false;
+    // Check every 1024 nodes for fast time controls
+    if ((thread->nodes & 1023) != 0) return false;
 
     auto now = std::chrono::steady_clock::now();
     int elapsed = static_cast<int>(
@@ -371,8 +371,26 @@ void iterative_deepening(SearchThread* thread, Board& board) {
         }
 
         if (!Threads.stop_flag) {
-            thread->bestMove = thread->pvLines[0].first();
-            thread->ponderMove = thread->pvLines[0].second();
+            Move bestMoveCandidate = thread->pvLines[0].first();
+            thread->bestMove = bestMoveCandidate;
+
+            // Validate ponder move by making best move first
+            thread->ponderMove = MOVE_NONE;  // Default to no ponder
+            if (bestMoveCandidate != MOVE_NONE && thread->pvLines[0].length > 1) {
+                Move ponderCandidate = thread->pvLines[0].second();
+                if (ponderCandidate != MOVE_NONE && thread->rootBoard) {
+                    // Make best move on a copy of the board
+                    StateInfo si;
+                    Board tempBoard = *thread->rootBoard;
+                    tempBoard.do_move(bestMoveCandidate, si);
+
+                    // Check if ponder move is legal in the new position
+                    if (MoveGen::is_legal(tempBoard, ponderCandidate)) {
+                        thread->ponderMove = ponderCandidate;
+                    }
+                }
+            }
+
             thread->bestScore = score;
             thread->completedDepth = depth;
 
