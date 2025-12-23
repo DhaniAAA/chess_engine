@@ -404,6 +404,11 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
                int depth, bool cutNode, int ply) {
     const bool pvNode = (beta - alpha) > 1;
 
+    // [GUARD PLY] Prevent array overflow and infinite recursion
+    if (ply >= MAX_PLY) {
+        return evaluate(board);
+    }
+
     // Update selective depth
     if (ply > thread->selDepth) {
         thread->selDepth = ply;
@@ -411,6 +416,12 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
 
     // Check for stop
     if (should_stop(thread)) return 0;
+
+    // Initialize PV for this ply BEFORE anything else
+    // This MUST happen before depth check to prevent stale PV data
+    if (ply < MAX_PLY) {
+        thread->pvLines[ply].clear();
+    }
 
     // Quiescence at depth 0
     if (depth <= 0) {
@@ -424,13 +435,23 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
     beta = std::min(beta, VALUE_MATE - ply - 1);
     if (alpha >= beta) return alpha;
 
-    // Initialize PV
-    thread->pvLines[ply].clear();
+    // Also clear child's PV to prevent stale moves from previous searches
+    if (ply + 1 < MAX_PLY) {
+        thread->pvLines[ply + 1].clear();
+    }
 
     // TT probe
     bool ttHit = false;
     TTEntry* tte = TT.probe(board.key(), ttHit);
     Move ttMove = ttHit ? tte->move() : MOVE_NONE;
+
+    // [TT VALIDATION] Validate ttMove is pseudo-legal to prevent hash collision issues
+    // If the move is illegal (could happen with hash collision), ignore the entire TT entry
+    if (ttMove != MOVE_NONE && !MoveGen::is_pseudo_legal(board, ttMove)) {
+        ttMove = MOVE_NONE;
+        ttHit = false;  // Treat as if we didn't find anything
+    }
+
     int ttScore = ttHit ? score_from_tt(tte->score(), ply) : VALUE_NONE;
     int ttDepth = ttHit ? tte->depth() : 0;
     Bound ttBound = ttHit ? tte->bound() : BOUND_NONE;
@@ -479,8 +500,10 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
     // Null move pruning
     bool hasNonPawnMaterial = board.pieces(board.side_to_move()) !=
                               board.pieces(board.side_to_move(), PAWN, KING);
-    ThreadStack* ss = &thread->stack[ply + 2];
-    bool doubleNull = (ply >= 1 && thread->stack[ply + 1].nullMovePruned);
+
+    // [GUARD] Safe stack access with bounds checking
+    ThreadStack* ss = (ply + 2 < MAX_PLY + 4) ? &thread->stack[ply + 2] : &thread->stack[MAX_PLY + 3];
+    bool doubleNull = (ply >= 1 && ply + 1 < MAX_PLY + 4 && thread->stack[ply + 1].nullMovePruned);
 
     if (!pvNode && !inCheck && staticEval >= beta && depth >= 3 &&
         hasNonPawnMaterial && !doubleNull) {
@@ -552,14 +575,18 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
 
         // Extensions
         int extension = 0;
-        int currentExt = (ply >= 2) ? thread->stack[ply + 1].extensions : 0;
+        // [GUARD] Safe stack access with bounds checking
+        int currentExt = (ply >= 2 && ply + 1 < MAX_PLY + 4) ? thread->stack[ply + 1].extensions : 0;
 
         if (givesCheck && currentExt < MAX_EXTENSIONS) {
             extension = 1;
         }
 
         int newDepth = depth - 1 + extension;
-        thread->stack[ply + 2].extensions = currentExt + extension;
+        // [GUARD] Safe stack write with bounds checking
+        if (ply + 2 < MAX_PLY + 4) {
+            thread->stack[ply + 2].extensions = currentExt + extension;
+        }
 
         // LMR
         int reduction = 0;
@@ -608,7 +635,10 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
             bestMove = m;
 
             if (score > alpha) {
-                thread->pvLines[ply].update(m, thread->pvLines[ply + 1]);
+                // [GUARD] Safe PV update with bounds checking
+                if (ply + 1 < MAX_PLY) {
+                    thread->pvLines[ply].update(m, thread->pvLines[ply + 1]);
+                }
 
                 if (score >= beta) {
                     if (!isCapture) {
@@ -622,7 +652,7 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
                     break;
                 }
                 alpha = score;
-            }
+            }  // close if (ply + 1 < MAX_PLY) - implicitly balanced by scope
         }
     }
 
@@ -644,6 +674,11 @@ int qsearch(SearchThread* thread, Board& board, int alpha, int beta, int ply) {
     ++thread->nodes;
 
     if (should_stop(thread)) return 0;
+
+    // [GUARD PLY] Prevent array overflow at maximum ply
+    if (ply >= MAX_PLY) {
+        return evaluate(board);
+    }
 
     bool inCheck = board.in_check();
     int staticEval = inCheck ? -VALUE_INFINITE : evaluate(board);

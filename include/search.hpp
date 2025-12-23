@@ -5,6 +5,7 @@
 #include "move.hpp"
 #include "moveorder.hpp"
 #include "tt.hpp"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <vector>
@@ -15,6 +16,7 @@
 
 constexpr int MAX_PLY = 128;
 constexpr int MAX_MOVES = 256;
+constexpr int MAX_MULTI_PV = 500;  // Maximum number of principal variations
 
 // ============================================================================
 // Search Limits
@@ -105,6 +107,7 @@ struct SearchStack {
     Move excludedMove;
     Move killers[2];
     int staticEval;
+    int correctedStaticEval;  // Static eval after correction history adjustment
     int moveCount;
     int extensions;       // Total extensions in this path (for limiting)
     bool inCheck;
@@ -112,6 +115,62 @@ struct SearchStack {
     bool ttHit;
     bool nullMovePruned;  // Was null move tried at this node?
     ContinuationHistoryEntry* contHistory;  // Pointer to continuation history entry for this move
+};
+
+// ============================================================================
+// Correction History
+// Tracks the average difference between static eval and search result
+// to correct systematic bias in evaluation
+// ============================================================================
+
+class CorrectionHistory {
+public:
+    // Size of the correction history table (power of 2 for efficient modulo)
+    static constexpr int SIZE = 16384;  // 16K entries
+
+    // Weight constants for exponential moving average
+    static constexpr int WEIGHT = 256;   // Weight for new entry
+    static constexpr int SCALE = 512;    // Scale divisor
+
+    CorrectionHistory() { clear(); }
+
+    void clear() {
+        for (int c = 0; c < COLOR_NB; ++c) {
+            for (int i = 0; i < SIZE; ++i) {
+                table[c][i] = 0;
+            }
+        }
+    }
+
+    // Get the correction value for a position (indexed by pawn structure key)
+    // Returns a correction value in centipawns
+    int get(Color c, Key pawnKey) const {
+        return table[c][pawnKey & (SIZE - 1)] / SCALE;
+    }
+
+    // Update correction history when we know the true search result
+    // diff = searchScore - staticEval (positive if eval was too pessimistic)
+    void update(Color c, Key pawnKey, int diff, int depth) {
+        // Weight based on depth - deeper searches provide more reliable data
+        int weight = std::min(depth * depth + 2 * depth - 2, 1024);
+
+        // Clamp diff to prevent extreme values
+        diff = std::clamp(diff, -400, 400);
+
+        int idx = pawnKey & (SIZE - 1);
+
+        // Exponential moving average update
+        // new_value = old_value * (1 - weight/1024) + diff * weight
+        table[c][idx] = (table[c][idx] * (1024 - weight) + diff * SCALE * weight) / 1024;
+
+        // Clamp to prevent runaway values
+        table[c][idx] = std::clamp(table[c][idx], -128 * SCALE, 128 * SCALE);
+    }
+
+private:
+    // Table indexed by [color][pawn_structure_hash]
+    // Stores scaled correction values
+    int table[COLOR_NB][SIZE];
 };
 
 // ============================================================================
@@ -127,7 +186,36 @@ struct SearchInfo {
     U64 time;
     U64 nps;
     int hashfull;
+    int multiPVIdx;  // MultiPV index (1-based for UCI output)
     PVLine pv;
+};
+
+// ============================================================================
+// Root Move (for MultiPV support)
+// Stores information about each legal move at the root position
+// ============================================================================
+
+struct RootMove {
+    Move move = MOVE_NONE;
+    int score = -VALUE_INFINITE;
+    int previousScore = -VALUE_INFINITE;
+    int selDepth = 0;
+    PVLine pv;
+
+    // Constructor
+    RootMove() = default;
+    explicit RootMove(Move m) : move(m), score(-VALUE_INFINITE), previousScore(-VALUE_INFINITE), selDepth(0) {
+        pv.clear();
+    }
+
+    // Comparison operators for sorting (by score, descending)
+    bool operator<(const RootMove& other) const {
+        return score != other.score ? score > other.score : previousScore > other.previousScore;
+    }
+
+    bool operator==(Move m) const {
+        return move == m;
+    }
 };
 
 // ============================================================================
@@ -184,13 +272,14 @@ private:
     bool should_stop() const;
 
     // UCI output
-    void report_info(int depth, int score, const PVLine& pv);
+    void report_info(int depth, int score, const PVLine& pv, int multiPVIdx = 1);
 
     // Move ordering tables
     KillerTable killers;
     CounterMoveTable counterMoves;
     HistoryTable history;
     ContinuationHistory contHistory;  // Continuation history (1-ply and 2-ply ago tracking)
+    CorrectionHistory corrHistory;    // Correction history for static eval bias correction
 
     // Search state
     std::atomic<bool> stopped;
@@ -203,6 +292,10 @@ private:
     Move rootPonderMove;
     int rootDepth;
     int rootPly;  // Starting ply for relative ply calculation
+
+    // MultiPV support
+    std::vector<RootMove> rootMoves;  // All legal root moves with their scores and PVs
+    int pvIdx;                         // Current PV index being searched (0-based)
 
     // Time management
     std::chrono::steady_clock::time_point startTime;

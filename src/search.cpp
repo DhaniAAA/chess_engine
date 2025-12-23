@@ -3,6 +3,7 @@
 #include "eval.hpp"
 #include "book.hpp"
 #include "tablebase.hpp"
+#include "uci.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cmath>
@@ -71,8 +72,8 @@ constexpr int PROBCUT_MARGIN = 100;   // Score margin above beta
 // ============================================================================
 
 Search::Search() : stopped(false), searching(false), rootBestMove(MOVE_NONE),
-                   rootPonderMove(MOVE_NONE), rootDepth(0), rootPly(0), optimumTime(0),
-                   maximumTime(0), previousMove(MOVE_NONE) {
+                   rootPonderMove(MOVE_NONE), rootDepth(0), rootPly(0), pvIdx(0),
+                   optimumTime(0), maximumTime(0), previousMove(MOVE_NONE) {
     static bool lmr_initialized = false;
     if (!lmr_initialized) {
         init_lmr_table();
@@ -97,6 +98,7 @@ void Search::clear_history() {
     counterMoves.clear();
     history.clear();
     contHistory.clear();
+    corrHistory.clear();  // Clear correction history between games
 }
 
 // ============================================================================
@@ -208,25 +210,30 @@ bool Search::should_stop() const {
 }
 
 // ============================================================================
-// Iterative Deepening
+// Iterative Deepening (with MultiPV support)
 // ============================================================================
 
 void Search::iterative_deepening(Board& board) {
     rootBestMove = MOVE_NONE;
+    rootPonderMove = MOVE_NONE;
     rootPly = board.game_ply();  // Store starting ply for relative ply calculation
-    int alpha = -VALUE_INFINITE;
-    int beta = VALUE_INFINITE;
-    int score = 0;
+    pvIdx = 0;
 
-    // Generate root moves
-    MoveList rootMoves;
-    MoveGen::generate_legal(board, rootMoves);
+    // Initialize root moves from legal move list
+    rootMoves.clear();
+    MoveList legalMoves;
+    MoveGen::generate_legal(board, legalMoves);
 
-    if (rootMoves.empty()) {
+    if (legalMoves.empty()) {
         return;  // No legal moves
     }
 
-    // [PERBAIKAN] Set fallback move ke move legal pertama
+    // Populate rootMoves vector
+    for (size_t i = 0; i < legalMoves.size(); ++i) {
+        rootMoves.push_back(RootMove(legalMoves[i].move));
+    }
+
+    // Set fallback move to first legal move
     rootBestMove = rootMoves[0].move;
 
     if (rootMoves.size() == 1 && !limits.infinite) {
@@ -235,81 +242,150 @@ void Search::iterative_deepening(Board& board) {
 
     int maxDepth = limits.depth > 0 ? limits.depth : MAX_PLY;
 
+    // Get MultiPV count from UCI options, clamped to legal move count
+    int multiPV = std::min(UCI::options.multiPV, static_cast<int>(rootMoves.size()));
+    multiPV = std::max(1, std::min(multiPV, MAX_MULTI_PV));
+
+    int previousScore = VALUE_NONE;
+    Move previousBestMove = MOVE_NONE;
+
     // Iterative deepening loop
     for (rootDepth = 1; rootDepth <= maxDepth && !stopped; ++rootDepth) {
-        // Aspiration windows
-        // [PERBAIKAN] Increased initial delta for more stable search
-        int delta = 50;
 
-        if (rootDepth >= 5) {
-            alpha = std::max(score - delta, -VALUE_INFINITE);
-            beta = std::min(score + delta, VALUE_INFINITE);
+        // Save previous scores for all root moves
+        for (auto& rm : rootMoves) {
+            rm.previousScore = rm.score;
         }
 
-        // Track number of fail highs/lows for stability
-        int failedHighLow = 0;
+        // MultiPV loop - search each PV line
+        for (pvIdx = 0; pvIdx < multiPV && !stopped; ++pvIdx) {
 
-        while (true) {
-            score = search(board, alpha, beta, rootDepth, false);
+            // Set aspiration window based on previous score
+            int alpha = -VALUE_INFINITE;
+            int beta = VALUE_INFINITE;
+            int delta = 50;
+            int score = rootMoves[pvIdx].previousScore;
 
-            if (stopped) break;
-
-            if (score <= alpha) {
-                // Fail low - widen alpha only (don't touch beta)
-                // [PERBAIKAN] Removed beta narrowing - it's wrong to narrow upper bound on fail low
+            // Use aspiration windows at higher depths
+            if (rootDepth >= 5 && score != -VALUE_INFINITE) {
                 alpha = std::max(score - delta, -VALUE_INFINITE);
-                // [PERBAIKAN] Exponential widening for faster convergence
-                delta *= 2;
-                ++failedHighLow;
-
-                // After too many fails, just use full window
-                if (failedHighLow >= 3) {
-                    alpha = -VALUE_INFINITE;
-                    beta = VALUE_INFINITE;
-                }
-            } else if (score >= beta) {
-                // Fail high - widen window
                 beta = std::min(score + delta, VALUE_INFINITE);
-                // [PERBAIKAN] Exponential widening for faster convergence
-                delta *= 2;
-                ++failedHighLow;
+            }
 
-                // After too many fails, just use full window
-                if (failedHighLow >= 3) {
-                    alpha = -VALUE_INFINITE;
-                    beta = VALUE_INFINITE;
+            // For subsequent PVs, use previous PV's score as upper bound
+            // This ensures we only find moves worse than already searched PVs
+            if (pvIdx > 0) {
+                // Search below the previous PV's score
+                int prevScore = rootMoves[pvIdx - 1].score;
+                beta = std::min(beta, prevScore + 1);
+                alpha = std::min(alpha, prevScore - delta);
+            }
+
+            // Aspiration window loop
+            int failedHighLow = 0;
+
+            while (true) {
+                score = search(board, alpha, beta, rootDepth, false);
+
+                if (stopped) break;
+
+                // Sort partial results to get the best move to the front of current PV range
+                // Only sort from pvIdx onwards to keep already-searched PVs in place
+                std::stable_sort(rootMoves.begin() + pvIdx, rootMoves.end());
+
+                if (score <= alpha) {
+                    // Fail low - widen alpha
+                    beta = (alpha + beta) / 2;
+                    alpha = std::max(score - delta, -VALUE_INFINITE);
+                    delta *= 2;
+                    ++failedHighLow;
+
+                    if (failedHighLow >= 3) {
+                        alpha = -VALUE_INFINITE;
+                        beta = VALUE_INFINITE;
+                    }
+                } else if (score >= beta) {
+                    // Fail high - widen beta
+                    beta = std::min(score + delta, VALUE_INFINITE);
+                    delta *= 2;
+                    ++failedHighLow;
+
+                    if (failedHighLow >= 3) {
+                        alpha = -VALUE_INFINITE;
+                        beta = VALUE_INFINITE;
+                    }
+                } else {
+                    // Search completed within window
+                    break;
                 }
-            } else {
-                // Search completed within window
-                break;
+            }
+
+            // Sort moves after completing this PV (keep previous PVs stable)
+            std::stable_sort(rootMoves.begin() + pvIdx, rootMoves.end());
+
+            if (!stopped) {
+                // Report this PV line
+                const RootMove& rm = rootMoves[pvIdx];
+                report_info(rootDepth, rm.score, rm.pv, pvIdx + 1);  // pvIdx is 0-based, UCI multipv is 1-based
             }
         }
 
-        if (!stopped) {
-            // [PERBAIKAN] Hanya update jika PV tidak kosong
-            if (pvLines[0].length > 0 && pvLines[0].moves[0] != MOVE_NONE) {
-                rootBestMove = pvLines[0].moves[0];
-            }
-            // Get ponder move (2nd move in PV) - validate it's not MOVE_NONE
-            Move ponder = (pvLines[0].length > 1) ? pvLines[0].moves[1] : MOVE_NONE;
-            rootPonderMove = (ponder != MOVE_NONE) ? ponder : MOVE_NONE;
-            report_info(rootDepth, score, pvLines[0]);
+        // After searching all PVs, update root best move from first PV
+        if (!stopped && !rootMoves.empty()) {
+            const RootMove& bestRM = rootMoves[0];
 
-            // Check if we've found a mate
-            if (score >= VALUE_MATE_IN_MAX_PLY || score <= VALUE_MATED_IN_MAX_PLY) {
-                // Continue searching for shorter mate if time permits
+            if (bestRM.pv.length > 0 && bestRM.pv.moves[0] != MOVE_NONE) {
+                Move candidate = bestRM.pv.moves[0];
+                if (MoveGen::is_legal(board, candidate)) {
+                    rootBestMove = candidate;
+                }
+            } else if (bestRM.move != MOVE_NONE) {
+                rootBestMove = bestRM.move;
             }
 
-            // Time management - check if we should stop early
-            // [PERBAIKAN] Jangan stop early untuk infinite search
+            // Get ponder move (2nd move in best PV)
+            rootPonderMove = (bestRM.pv.length > 1) ? bestRM.pv.moves[1] : MOVE_NONE;
+
+            // Copy best PV to pvLines[0] for compatibility
+            pvLines[0] = bestRM.pv;
+
+            // Panic Logic: Monitor score fluctuation and best move stability
             if (!limits.infinite && limits.movetime == 0) {
+                int score = bestRM.score;
+
+                if (rootDepth >= 6) {
+                    bool unstable = false;
+
+                    // 1. Score fluctuation
+                    if (previousScore != VALUE_NONE) {
+                        int fluctuation = std::abs(score - previousScore);
+                        if (fluctuation > 50) {
+                            unstable = true;
+                        }
+                    }
+
+                    // 2. Best move instability
+                    if (previousBestMove != MOVE_NONE && rootBestMove != previousBestMove) {
+                        unstable = true;
+                    }
+
+                    // If unstable, extend time (Panic Mode)
+                    if (unstable) {
+                        optimumTime = std::min(maximumTime, optimumTime + optimumTime / 2);
+                    }
+                }
+
+                previousScore = score;
+                previousBestMove = rootBestMove;
+
                 auto now = std::chrono::steady_clock::now();
                 int elapsed = static_cast<int>(
                     std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count()
                 );
 
-                if (elapsed > optimumTime * 0.6) {
-                    break;  // Used more than half of optimum time
+                // Only break early if not in MultiPV analysis mode
+                if (multiPV == 1 && elapsed > optimumTime * 0.6) {
+                    break;
                 }
             }
         }
@@ -327,13 +403,16 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     // Calculate relative ply from root position (not absolute game ply)
     int ply = board.game_ply() - rootPly;
 
+    if (ply >= MAX_PLY) {
+        return evaluate(board);
+    }
     // Update selective depth
     if (ply > searchStats.selDepth) {
         searchStats.selDepth = ply;
     }
 
     // Check for time/node limits - check more frequently for responsiveness
-    if ((searchStats.nodes & 1023) == 0) {
+    if ((searchStats.nodes & 2047) == 0) {
         check_time();
     }
 
@@ -368,6 +447,13 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     bool ttHit = false;
     TTEntry* tte = TT.probe(board.key(), ttHit);
     Move ttMove = ttHit ? tte->move() : MOVE_NONE;
+
+    // [PERBAIKAN] Validasi ttMove dengan is_legal. Jika ilegal (misal hash collision),
+    // abaikan seluruh entry TT untuk mencegah crash atau cutoff yang salah.
+    if (ttMove != MOVE_NONE && !MoveGen::is_legal(board, ttMove)) {
+        ttMove = MOVE_NONE;
+        ttHit = false;
+    }
     int ttScore = ttHit ? score_from_tt(tte->score(), ply) : VALUE_NONE;
     int ttDepth = ttHit ? tte->depth() : 0;
     Bound ttBound = ttHit ? tte->bound() : BOUND_NONE;
@@ -383,21 +469,33 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
 
     // Get static evaluation
     int staticEval;
+    int correctedStaticEval;  // Static eval with correction history applied
     bool inCheck = board.in_check();
+    Color us = board.side_to_move();
 
     if (inCheck) {
         staticEval = VALUE_NONE;
+        correctedStaticEval = VALUE_NONE;
     } else if (ttHit && tte->eval() != VALUE_NONE) {
         staticEval = tte->eval();
+        // Apply correction history to cached eval
+        int correction = corrHistory.get(us, board.pawn_key());
+        correctedStaticEval = staticEval + correction;
     } else {
         staticEval = evaluate(board);
+        // Apply correction history to improve eval accuracy
+        int correction = corrHistory.get(us, board.pawn_key());
+        correctedStaticEval = staticEval + correction;
     }
 
+    // Note: staticEval and correctedStaticEval are local variables; they will be stored
+    // in the search stack later when ss is properly initialized
+
     // Razoring (at low depths, if eval is far below alpha)
-    // Use table-based margins for more precise pruning
+    // Use corrected eval for more accurate pruning decisions
     if (!pvNode && !inCheck && depth <= 3 && depth >= 1) {
         int razorMargin = RazorMargin[depth];
-        if (staticEval + razorMargin <= alpha) {
+        if (correctedStaticEval + razorMargin <= alpha) {
             int razorScore = qsearch(board, alpha - razorMargin, alpha - razorMargin + 1);
             if (razorScore <= alpha - razorMargin) {
                 return razorScore;
@@ -406,11 +504,11 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     }
 
     // Reverse futility pruning / Static null move pruning
-    // Use table-based margins for better tuning
+    // Use corrected eval for more accurate pruning
     if (!pvNode && !inCheck && depth <= 6 && depth >= 1) {
         int rfpMargin = RFPMargin[depth];
-        if (staticEval - rfpMargin >= beta && staticEval < VALUE_MATE_IN_MAX_PLY) {
-            return staticEval;
+        if (correctedStaticEval - rfpMargin >= beta && correctedStaticEval < VALUE_MATE_IN_MAX_PLY) {
+            return correctedStaticEval;
         }
     }
 
@@ -420,17 +518,19 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                               board.pieces(board.side_to_move(), PAWN, KING);
 
     // Get previous stack entry for double null move check
-    SearchStack* ss = &stack[ply + 2];  // Adjusted for stack offset
-    bool doubleNullMove = (ss->ply >= 1 && stack[ply + 1].nullMovePruned);
+    // Guard against array overflow
+    SearchStack* ss = (ply + 2 < MAX_PLY + 4) ? &stack[ply + 2] : &stack[MAX_PLY + 3];
+    bool doubleNullMove = (ply >= 1 && ply + 1 < MAX_PLY + 4 && stack[ply + 1].nullMovePruned);
 
     // Null move pruning
     // Conditions: not PV, not in check, eval >= beta, have non-pawn material,
     // not after a null move (avoid double null move)
-    if (!pvNode && !inCheck && staticEval >= beta && depth >= 3 &&
+    // Use corrected eval for more accurate pruning decisions
+    if (!pvNode && !inCheck && correctedStaticEval >= beta && depth >= 3 &&
         hasNonPawnMaterial && !doubleNullMove) {
 
-        // Dynamic reduction based on depth and eval
-        int R = 3 + depth / 4 + std::min(3, (staticEval - beta) / 200);
+        // Dynamic reduction based on depth and corrected eval
+        int R = 3 + depth / 4 + std::min(3, (correctedStaticEval - beta) / 200);
 
         // Make null move
         StateInfo si;
@@ -591,18 +691,46 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     // Track singularity for best move check
     bool singularSearched = false;
 
+    // Root node flag for MultiPV handling
+    const bool rootNode = (ply == 0);
+
     // Get continuation history entries for move ordering
     // ss-1 = 1-ply ago, ss-2 = 2-ply ago (ss already defined above)
-    const ContinuationHistoryEntry* contHist1ply = (ply >= 1 && stack[ply + 1].contHistory) ?
+    // Guard against array overflow with ply + 1 check
+    const ContinuationHistoryEntry* contHist1ply = (ply >= 1 && ply + 1 < MAX_PLY + 4 && stack[ply + 1].contHistory) ?
                                                     stack[ply + 1].contHistory : nullptr;
-    const ContinuationHistoryEntry* contHist2ply = (ply >= 2 && stack[ply].contHistory) ?
+    const ContinuationHistoryEntry* contHist2ply = (ply >= 2 && ply < MAX_PLY + 4 && stack[ply].contHistory) ?
                                                     stack[ply].contHistory : nullptr;
 
+    // For root node with MultiPV, we iterate through rootMoves directly
+    // For non-root nodes, we use MovePicker
     MovePicker mp(board, ttMove, ply, killers, counterMoves, history, previousMove,
                   contHist1ply, contHist2ply);
+
+    // Root move index for iterating through rootMoves (only used at root)
+    size_t rootMoveIdx = 0;
     Move m;
 
-    while ((m = mp.next_move()) != MOVE_NONE) {
+    // Main move loop
+    // At root node, iterate through rootMoves starting from pvIdx
+    // At other nodes, use MovePicker
+    while (true) {
+        // Get next move based on whether we're at root or not
+        if (rootNode) {
+            // At root, iterate through rootMoves starting from pvIdx
+            if (rootMoveIdx + pvIdx >= rootMoves.size()) {
+                break;  // No more moves
+            }
+            m = rootMoves[rootMoveIdx + pvIdx].move;
+            ++rootMoveIdx;
+        } else {
+            // At non-root nodes, use MovePicker
+            m = mp.next_move();
+            if (m == MOVE_NONE) {
+                break;  // No more moves
+            }
+        }
+
         // Skip excluded move (used for singular extension verification)
         if (m == ss->excludedMove) {
             continue;
@@ -652,11 +780,11 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
 
         // Futility Pruning
         // Skip quiet moves that can't raise alpha even with optimistic margin
-        // [PERBAIKAN] Skip futility pruning for threatening moves
+        // Use corrected eval for more accurate pruning
         if (!pvNode && !inCheck && depth <= 6 && depth >= 1 && !isCapture && !isPromotion &&
             bestScore > VALUE_MATED_IN_MAX_PLY && !givesCheck && !createsThreat) {
             int futilityMargin = FutilityMargin[depth];
-            if (staticEval + futilityMargin <= alpha) {
+            if (correctedStaticEval + futilityMargin <= alpha) {
                 // Skip this move - it won't raise alpha
                 continue;
             }
@@ -822,8 +950,23 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             bestMove = m;
 
             if (score > alpha) {
-                // Update PV
-                pvLines[ply].update(m, pvLines[ply + 1]);
+                // Update PV - guard against overflow
+                if (ply + 1 < MAX_PLY) {
+                    pvLines[ply].update(m, pvLines[ply + 1]);
+                }
+
+                // At root node, update rootMoves for MultiPV
+                if (rootNode) {
+                    // Find this move in rootMoves and update it
+                    for (auto& rm : rootMoves) {
+                        if (rm.move == m) {
+                            rm.score = score;
+                            rm.selDepth = searchStats.selDepth;
+                            rm.pv = pvLines[ply];
+                            break;
+                        }
+                    }
+                }
 
                 if (score >= beta) {
                     // Beta cutoff
@@ -898,6 +1041,24 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                   bound, depth, bestMove, TT.generation());
     }
 
+    // ========================================================================
+    // Update Correction History
+    // When we have a reliable search result (exact bound or fail high/low),
+    // update the correction history to improve future static eval accuracy
+    // ========================================================================
+    if (!inCheck && staticEval != VALUE_NONE && depth >= 3) {
+        // Calculate the difference between search result and static eval
+        // Positive diff means eval was too pessimistic, negative means too optimistic
+        int diff = bestScore - staticEval;
+
+        // Only update on reliable results (not when we failed low with no moves tried)
+        if (bound == BOUND_EXACT ||
+            (bound == BOUND_LOWER && bestScore >= beta) ||
+            (bound == BOUND_UPPER && moveCount > 0)) {
+            corrHistory.update(us, board.pawn_key(), diff, depth);
+        }
+    }
+
     return bestScore;
 }
 
@@ -918,6 +1079,10 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
 
     // Calculate relative ply from root position
     int ply = board.game_ply() - rootPly;
+
+    if (ply >= MAX_PLY) {
+        return evaluate(board); // atau return alpha/beta
+    }
     bool inCheck = board.in_check();
 
     // Stand pat
@@ -961,6 +1126,12 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
     bool ttHit = false;
     TTEntry* tte = TT.probe(board.key(), ttHit);
     Move ttMove = ttHit ? tte->move() : MOVE_NONE;
+
+    // [PERBAIKAN] Validasi ttMove di qsearch dengan is_legal
+    if (ttMove != MOVE_NONE && !MoveGen::is_legal(board, ttMove)) {
+        ttMove = MOVE_NONE;
+        ttHit = false;
+    }
 
     MovePicker mp(board, ttMove, history);
     Move m;
@@ -1081,7 +1252,7 @@ int Search::evaluate(const Board& board) {
 // UCI Output
 // ============================================================================
 
-void Search::report_info(int depth, int score, const PVLine& pv) {
+void Search::report_info(int depth, int score, const PVLine& pv, int multiPVIdx) {
     auto now = std::chrono::steady_clock::now();
     U64 elapsed = static_cast<U64>(
         std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count()
@@ -1094,6 +1265,11 @@ void Search::report_info(int depth, int score, const PVLine& pv) {
     std::cout << "info";
     std::cout << " depth " << depth;
     std::cout << " seldepth " << searchStats.selDepth;
+
+    // MultiPV index (1-based for UCI protocol)
+    if (UCI::options.multiPV > 1) {
+        std::cout << " multipv " << multiPVIdx;
+    }
 
     if (std::abs(score) >= VALUE_MATE_IN_MAX_PLY) {
         int mateIn = (score > 0) ?
@@ -1122,6 +1298,7 @@ void Search::report_info(int depth, int score, const PVLine& pv) {
         info.time = elapsed;
         info.nps = nps;
         info.hashfull = TT.hashfull();
+        info.multiPVIdx = multiPVIdx;
         info.pv = pv;
         infoCallback(info);
     }

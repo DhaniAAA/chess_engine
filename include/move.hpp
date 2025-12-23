@@ -89,8 +89,16 @@ inline std::string move_to_string(Move m) {
 
     std::string s = square_to_string(m.from()) + square_to_string(m.to());
 
+    // Only add promotion suffix if it's actually a valid pawn promotion
+    // (from 7th rank to 8th or from 2nd rank to 1st)
     if (m.is_promotion()) {
-        s += " nbrq"[m.promotion_type() - KNIGHT];
+        Rank fromRank = rank_of(m.from());
+        Rank toRank = rank_of(m.to());
+        bool isValidPromotion = (fromRank == RANK_7 && toRank == RANK_8) ||  // White promotion
+                                (fromRank == RANK_2 && toRank == RANK_1);    // Black promotion
+        if (isValidPromotion) {
+            s += " nbrq"[m.promotion_type() - KNIGHT];
+        }
     }
 
     return s;

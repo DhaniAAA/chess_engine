@@ -125,11 +125,22 @@ constexpr EvalScore PassedPawnBonus[8] = {
     S(  0,   0), S(  5,  10), S( 10,  20), S( 20,  40),
     S( 40,  75), S( 70, 120), S(100, 180), S(  0,   0)
 };
+
+// Connected passed pawn bonus (multiplier for passed pawns that support each other)
+constexpr EvalScore ConnectedPassedBonus[8] = {
+    S(  0,   0), S(  5,   8), S( 10,  15), S( 15,  25),
+    S( 25,  45), S( 40,  70), S( 60, 100), S(  0,   0)
+};
+
     using Tuning::IsolatedPawnPenalty;
     using Tuning::DoubledPawnPenalty;
     using Tuning::BackwardPawnPenalty;
     using Tuning::ConnectedPawnBonus;
     using Tuning::PhalanxBonus;
+
+// King safety - semi-open file near enemy king
+constexpr EvalScore KingSemiOpenFilePenalty = S( 15, 0);   // Our semi-open file near enemy king
+constexpr EvalScore KingOpenFilePenalty     = S( 25, 0);   // Open file near enemy king
 
 // Piece activity
     using Tuning::BishopPairBonus;
@@ -240,6 +251,39 @@ inline Bitboard passed_pawn_mask(Color c, Square s) {
     return front;
 }
 
+// Get backward pawn stop square (the square immediately in front)
+inline Square pawn_push(Color c, Square s) {
+    return c == WHITE ? Square(s + 8) : Square(s - 8);
+}
+
+// Check if a pawn is backward:
+// A pawn is backward if it cannot be defended by friendly pawns and
+// its stop square is controlled by enemy pawns
+inline bool is_backward_pawn(Color c, Square s, Bitboard ourPawns, Bitboard theirPawns) {
+    File f = file_of(s);
+    Rank r = rank_of(s);
+
+    // Get friendly pawns on adjacent files
+    Bitboard neighbors = adjacent_files_bb(f) & ourPawns;
+    if (!neighbors) return false;  // Isolated pawns handled separately
+
+    // Check if all neighboring pawns are ahead of us
+    Bitboard behindMask = c == WHITE ?
+        (0xFFFFFFFFFFFFFFFFULL >> (64 - r * 8)) :
+        (0xFFFFFFFFFFFFFFFFULL << ((r + 1) * 8));
+
+    // If no neighbor is behind or on same rank, we might be backward
+    if (neighbors & ~behindMask) return false;  // Some neighbor can still support us
+
+    // Check if the stop square is attacked by enemy pawns
+    Square stopSq = pawn_push(c, s);
+    Bitboard stopAttacks = c == WHITE ?
+        ((square_bb(stopSq) >> 7) & ~file_bb(FILE_A)) | ((square_bb(stopSq) >> 9) & ~file_bb(FILE_H)) :
+        ((square_bb(stopSq) << 7) & ~file_bb(FILE_H)) | ((square_bb(stopSq) << 9) & ~file_bb(FILE_A));
+
+    return (stopAttacks & theirPawns) != 0;
+}
+
 // ============================================================================
 // Evaluation Components
 // ============================================================================
@@ -305,25 +349,56 @@ inline EvalScore eval_pawn_structure(const Board& board, Color c) {
     Bitboard ourPawns = board.pieces(c, PAWN);
     Bitboard theirPawns = board.pieces(enemy, PAWN);
 
+    // First pass: identify all passed pawns for connected passed pawn detection
+    Bitboard passedPawns = 0;
+    Bitboard tempBb = ourPawns;
+    while (tempBb) {
+        Square sq = pop_lsb(tempBb);
+        if (!(passed_pawn_mask(c, sq) & theirPawns)) {
+            passedPawns |= square_bb(sq);
+        }
+    }
+
     Bitboard bb = ourPawns;
     while (bb) {
         Square sq = pop_lsb(bb);
         File f = file_of(sq);
         Rank r = c == WHITE ? rank_of(sq) : Rank(RANK_8 - rank_of(sq));
+        bool isIsolated = !(adjacent_files_bb(f) & ourPawns);
 
         // Passed pawn check
-        if (!(passed_pawn_mask(c, sq) & theirPawns)) {
+        bool isPassed = (passedPawns & square_bb(sq)) != 0;
+        if (isPassed) {
             score += PassedPawnBonus[r];
+
+            // Connected passed pawn bonus
+            // Check if there's another passed pawn on adjacent file that can support
+            Bitboard adjacentPassers = adjacent_files_bb(f) & passedPawns;
+            if (adjacentPassers) {
+                // Check if the adjacent passer is on same or adjacent rank (can support)
+                Bitboard supportRange = rank_bb_eval(rank_of(sq));
+                if (rank_of(sq) > RANK_1) supportRange |= rank_bb_eval(Rank(rank_of(sq) - 1));
+                if (rank_of(sq) < RANK_8) supportRange |= rank_bb_eval(Rank(rank_of(sq) + 1));
+
+                if (adjacentPassers & supportRange) {
+                    score += ConnectedPassedBonus[r];
+                }
+            }
         }
 
         // Isolated pawn check
-        if (!(adjacent_files_bb(f) & ourPawns)) {
+        if (isIsolated) {
             score += IsolatedPawnPenalty;
         }
 
         // Doubled pawn check
         if (popcount(file_bb(f) & ourPawns) > 1) {
             score += DoubledPawnPenalty;
+        }
+
+        // Backward pawn check (only if not isolated - isolated already penalized)
+        if (!isIsolated && !isPassed && is_backward_pawn(c, sq, ourPawns, theirPawns)) {
+            score += BackwardPawnPenalty;
         }
 
         // Connected pawn check
@@ -427,13 +502,11 @@ inline EvalScore eval_king_safety(const Board& board, Color c) {
     Color enemy = ~c;
     Square kingSq = board.king_square(c);
     Bitboard occupied = board.pieces();
+    Bitboard ourPawns = board.pieces(c, PAWN);
+    Bitboard theirPawns = board.pieces(enemy, PAWN);
 
     // King zone (3x3 area around king)
     Bitboard kingZone = king_attacks_bb(kingSq) | square_bb(kingSq);
-
-    // Get all enemy attacks on king zone using pre-computed attack bitboards
-    // This is faster than looping through each piece individually
-    // Bitboard enemyPieces = board.pieces(enemy);
 
     int attackUnits = 0;
     int attackCount = 0;
@@ -478,11 +551,42 @@ inline EvalScore eval_king_safety(const Board& board, Color c) {
         score.mg -= safetyPenalty;
     }
 
+    // ========================================================================
+    // Semi-open and open file evaluation near enemy king
+    // Bonus for US if we have semi-open/open files pointing at enemy king
+    // This is evaluated from OUR perspective attacking THEIR king
+    // ========================================================================
+    Square enemyKingSq = board.king_square(enemy);
+    File enemyKingFile = file_of(enemyKingSq);
+
+    // Check files around enemy king (king file and adjacent files)
+    for (int df = -1; df <= 1; df++) {
+        File f = File(enemyKingFile + df);
+        if (f < FILE_A || f > FILE_H) continue;
+
+        Bitboard fileMask = file_bb(f);
+        bool hasOurPawn = (fileMask & ourPawns) != 0;
+        bool hasTheirPawn = (fileMask & theirPawns) != 0;
+
+        // We get bonus if the file is open or semi-open (no OUR pawn on it)
+        // This means we can potentially place rooks/queens there
+        if (!hasOurPawn) {
+            if (!hasTheirPawn) {
+                // Completely open file near enemy king - very dangerous for them
+                score += KingOpenFilePenalty;  // Bonus for us (penalty is from their perspective)
+            } else {
+                // Semi-open file - we have no pawn, they do
+                score += KingSemiOpenFilePenalty;
+            }
+        }
+    }
+
+    // ========================================================================
     // Pawn shield evaluation (for castled king) - simplified
+    // ========================================================================
     Rank kingRank = c == WHITE ? rank_of(kingSq) : Rank(RANK_8 - rank_of(kingSq));
     if (kingRank <= RANK_2) {
         File kingFile = file_of(kingSq);
-        Bitboard ourPawns = board.pieces(c, PAWN);
         Bitboard shieldZone = c == WHITE ?
             (rank_bb_eval(RANK_2) | rank_bb_eval(RANK_3)) :
             (rank_bb_eval(RANK_6) | rank_bb_eval(RANK_7));
