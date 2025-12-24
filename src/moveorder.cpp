@@ -192,6 +192,15 @@ MovePicker::MovePicker(const Board& b, Move tt, const HistoryTable& ht)
       counterMove(MOVE_NONE), currentIdx(0), ply(0),
       stage(STAGE_QS_TT_MOVE) {}
 
+// QSearch constructor with capture history for improved ordering
+MovePicker::MovePicker(const Board& b, Move tt, const HistoryTable& ht,
+                       const int (*ch)[64][8])
+    : board(b), history(ht), killers(nullptr), counterMoves(nullptr),
+      contHist1ply(nullptr), contHist2ply(nullptr), captureHistory(ch),
+      ttMove(tt), killer1(MOVE_NONE), killer2(MOVE_NONE),
+      counterMove(MOVE_NONE), currentIdx(0), ply(0),
+      stage(STAGE_QS_TT_MOVE) {}
+
 void MovePicker::score_captures() {
     for (auto& sm : moves) {
         Move m = sm.move;

@@ -341,8 +341,12 @@ public:
                const ContinuationHistoryEntry* contHist2 = nullptr,
                const int (*captureHistory)[64][8] = nullptr);
 
-    // Constructor for quiescence search
+    // Constructor for quiescence search (basic - no capture history)
     MovePicker(const Board& b, Move ttMove, const HistoryTable& ht);
+
+    // Constructor for quiescence search (advanced - with capture history)
+    MovePicker(const Board& b, Move ttMove, const HistoryTable& ht,
+               const int (*captureHistory)[64][8]);
 
     // Get next move (returns MOVE_NONE when exhausted)
     Move next_move();

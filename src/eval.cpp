@@ -294,6 +294,56 @@ EvalScore eval_pieces(const Board& board, Color c) {
     return score;
 }
 
+// ============================================================================
+// Space Evaluation
+// Evaluates control of central squares behind pawns.
+// More space = more room for pieces to maneuver.
+// ============================================================================
+
+EvalScore eval_space(const Board& board, Color c) {
+    EvalScore score;
+    Color enemy = ~c;
+
+    // Space area: central squares (files C-F, ranks 2-4 for White, 5-7 for Black)
+    constexpr Bitboard WhiteSpaceArea = 0x00003C3C3C000000ULL;  // C2-F4 extended
+    constexpr Bitboard BlackSpaceArea = 0x000000003C3C3C00ULL;  // C5-F7 extended
+
+    Bitboard spaceArea = (c == WHITE) ? WhiteSpaceArea : BlackSpaceArea;
+
+    Bitboard ourPawns = board.pieces(c, PAWN);
+    Bitboard theirPawns = board.pieces(enemy, PAWN);
+
+    // Calculate "behind pawns" area - squares our pawns protect from the rear
+    Bitboard behindPawns;
+    if (c == WHITE) {
+        // All squares south of our pawns
+        behindPawns = ourPawns >> 8;
+        behindPawns |= behindPawns >> 8;
+        behindPawns |= behindPawns >> 16;
+    } else {
+        // All squares north of our pawns
+        behindPawns = ourPawns << 8;
+        behindPawns |= behindPawns << 8;
+        behindPawns |= behindPawns << 16;
+    }
+
+    // Safe squares = in space area AND (behind our pawns OR not attacked by enemy pawns)
+    Bitboard enemyPawnAttacks = pawn_attacks_bb(enemy, theirPawns);
+    Bitboard safe = spaceArea & (behindPawns | ~enemyPawnAttacks);
+
+    // Count safe space squares
+    int spaceCount = popcount(safe);
+
+    // Bonus scales with piece count (space matters more with many pieces)
+    int pieceCount = popcount(board.pieces(c)) - 1;  // Exclude king
+    int spaceBonus = (spaceCount * spaceCount * pieceCount) / 128;
+
+    score.mg = spaceBonus;
+    score.eg = spaceBonus / 2;  // Less important in endgame
+
+    return score;
+}
+
 EvalScore eval_king_safety(const Board& board, Color c) {
     EvalScore score;
     Color enemy = ~c;
@@ -453,6 +503,10 @@ int evaluate(const Board& board, int alpha, int beta) {
     // King safety
     score += eval_king_safety(board, WHITE);
     score -= eval_king_safety(board, BLACK);
+
+    // Space evaluation (control of central squares)
+    score += eval_space(board, WHITE);
+    score -= eval_space(board, BLACK);
 
     // Tapered evaluation
     int mg = score.mg;

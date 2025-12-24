@@ -47,6 +47,10 @@ constexpr int SEE_CAPTURE_MAX_DEPTH = 4;
 constexpr int SEE_CAPTURE_THRESHOLD_PER_DEPTH = -50;
 constexpr int SEE_QUIET_THRESHOLD_PER_DEPTH = -100;
 
+// History Leaf Pruning threshold (prune moves with very negative history)
+constexpr int HISTORY_LEAF_PRUNING_DEPTH = 4;    // Max depth for history pruning
+constexpr int HISTORY_LEAF_PRUNING_MARGIN = 8000; // Base margin per depth
+
 // ============================================================================
 // Extension Parameters
 // ============================================================================
@@ -88,11 +92,14 @@ constexpr int ASPIRATION_MIN_DEPTH = 5;      // Minimum depth to use aspiration 
 constexpr int ASPIRATION_MAX_FAILS = 3;      // Max fails before using full window
 
 // ============================================================================
-// IID (Internal Iterative Deepening) Parameters
+// IIR (Internal Iterative Reductions) Parameters
+// Replaces IID - more efficient depth reduction instead of shallow search
 // ============================================================================
 
-constexpr int IID_MIN_DEPTH = 6;             // Minimum depth for IID
-constexpr int IID_REDUCTION = 2;             // Depth reduction for IID search
+constexpr int IIR_MIN_DEPTH = 4;             // Minimum depth for IIR
+constexpr int IIR_REDUCTION = 1;             // Depth reduction when no TT move
+constexpr int IIR_PV_REDUCTION = 1;          // Reduction in PV nodes
+constexpr int IIR_CUT_REDUCTION = 2;         // Reduction in cut nodes (more aggressive)
 
 // ============================================================================
 // Quiescence Search Parameters

@@ -215,6 +215,7 @@ EvalScore eval_material_pst(const Board& board, Color c);
 EvalScore eval_pawn_structure(const Board& board, Color c);
 EvalScore eval_pieces(const Board& board, Color c);
 EvalScore eval_king_safety(const Board& board, Color c);
+EvalScore eval_space(const Board& board, Color c);
 
 // Incremental PST helper - returns material + PST score for a single piece
 // Used by Board::do_move/undo_move for incremental updates

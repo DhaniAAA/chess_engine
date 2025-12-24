@@ -753,19 +753,18 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         }
     }
 
-    // Internal Iterative Deepening (IID)
-    // If we have no hash move and high depth, do a shallow search first
-    if (!ttMove && depth >= 6 && (pvNode || cutNode)) {
-        int iidDepth = depth - 2;
-        search(board, alpha, beta, iidDepth, cutNode);
-
-        // Probe TT again
-        tte = TT.probe(board.key(), ttHit);
-        ttMove = ttHit ? tte->move() : MOVE_NONE;
-
-        // [PERBAIKAN] Validasi ttMove setelah IID untuk mencegah illegal move
-        if (ttMove != MOVE_NONE && (!MoveGen::is_pseudo_legal(board, ttMove) || !MoveGen::is_legal(board, ttMove))) {
-            ttMove = MOVE_NONE;
+    // ========================================================================
+    // Internal Iterative Reductions (IIR) - Replaces IID
+    // If we have no hash move, reduce depth instead of doing expensive IID
+    // This is more efficient than IID and achieves similar results
+    // ========================================================================
+    if (!ttMove && depth >= IIR_MIN_DEPTH) {
+        if (pvNode) {
+            depth -= IIR_PV_REDUCTION;
+        } else if (cutNode) {
+            depth -= IIR_CUT_REDUCTION;
+        } else {
+            depth -= IIR_REDUCTION;
         }
     }
 
@@ -892,6 +891,20 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         }
 
         // ====================================================================
+        // History Leaf Pruning
+        // Prune quiet moves with very negative history scores at low depths.
+        // These moves have historically failed to produce cutoffs.
+        // ====================================================================
+        if (!pvNode && !inCheck && depth <= HISTORY_LEAF_PRUNING_DEPTH &&
+            !isCapture && !isPromotion && !givesCheck && !createsThreat &&
+            bestScore > VALUE_MATED_IN_MAX_PLY) {
+            int histScore = history.get(board.side_to_move(), m);
+            if (histScore < -HISTORY_LEAF_PRUNING_MARGIN * depth) {
+                continue;  // Skip moves with very bad history
+            }
+        }
+
+        // ====================================================================
         // Extensions
         // ====================================================================
 
@@ -944,47 +957,88 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         }
 
         // ====================================================================
-        // Late Move Reductions (LMR)
+        // Late Move Reductions (LMR) - IMPROVED TUNING
         // ====================================================================
 
         int reduction = 0;
-        if (depth >= 3 && moveCount > 1 && !isCapture && !isPromotion) {
+        if (depth >= 2 && moveCount > 1 && !isCapture && !isPromotion) {
             reduction = LMRTable[std::min(depth, 63)][std::min(moveCount, 63)];
 
-            if (createsThreat) {
-                reduction -= 2;
+            // ----------------------------------------------------------------
+            // Reduction increases (search less deep)
+            // ----------------------------------------------------------------
+
+            // Reduce more in cut nodes (expected to fail high)
+            if (cutNode) {
+                reduction += 2;
             }
-            // Reduce less in PV nodes
+
+            // Reduce more if not improving (position getting worse)
+            if (!improving) {
+                reduction += 1;
+            }
+
+            // Reduce more for very late moves
+            if (moveCount > 10) {
+                reduction += 1;
+            }
+
+            // ----------------------------------------------------------------
+            // Reduction decreases (search deeper)
+            // ----------------------------------------------------------------
+
+            // Reduce less in PV nodes (critical path)
             if (pvNode) {
                 reduction -= 1;
             }
 
-            // Reduce more in cut nodes
-            if (cutNode) {
-                reduction += 1;
-            }
-
-            // Reduce less if in check
+            // Reduce less if in check (tactical situation)
             if (inCheck) {
                 reduction -= 1;
             }
 
-            // Reduce less if gives check
+            // Reduce less if gives check (forcing move)
             if (givesCheck) {
-                reduction -= 1;
+                reduction -= 2;
             }
 
-            // Reduce less for killer/counter moves
+            // Reduce less for threatening moves
+            if (createsThreat) {
+                reduction -= 2;
+            }
+
+            // Reduce less for killer/counter moves (proven good in siblings)
             if (killers.is_killer(ply, m) ||
                 (previousMove && m == counterMoves.get(board.piece_on(previousMove.to()), previousMove.to()))) {
+                reduction -= 2;
+            }
+
+            // Reduce less for TT move
+            if (isTTMove) {
                 reduction -= 1;
             }
 
-            // Adjust by history
+            // ----------------------------------------------------------------
+            // History-based adjustment (more granular)
+            // ----------------------------------------------------------------
             int histScore = history.get(board.side_to_move(), m);
-            reduction -= histScore / 5000;
 
-            // Don't reduce below 1 or into qsearch
+            // Add continuation history scores for better accuracy
+            PieceType pt = type_of(movedPiece);
+            if (contHist1ply) {
+                histScore += contHist1ply->get(pt, m.to());
+            }
+            if (contHist2ply) {
+                histScore += contHist2ply->get(pt, m.to()) / 2;
+            }
+
+            // Scale history adjustment: [-3, +3] range
+            reduction -= std::clamp(histScore / 4000, -3, 3);
+
+            // ----------------------------------------------------------------
+            // Clamp reduction
+            // ----------------------------------------------------------------
+            // Don't reduce below 1 or into negative/qsearch
             reduction = std::clamp(reduction, 0, newDepth - 1);
         }
 
@@ -1250,7 +1304,8 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
         ttHit = false;
     }
 
-    MovePicker mp(board, ttMove, history);
+    // Use MovePicker with capture history for better ordering in qsearch
+    MovePicker mp(board, ttMove, history, captureHistory);
     Move m;
     int bestScore = inCheck ? -VALUE_INFINITE : staticEval;
 
