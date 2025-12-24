@@ -18,8 +18,7 @@ CXX = g++
 # -fno-exceptions: Disable exceptions for faster code (if not used)
 # -funroll-loops: Unroll loops for speed
 # -fomit-frame-pointer: Free up a register for faster code
-CXXFLAGS := -std=c++17 -Wall -Wextra -O3 -march=native -DNDEBUG \
-            -flto -funroll-loops -fomit-frame-pointer
+CXXFLAGS := -std=c++17 -Wall -Wextra -O3 -march=native -DNDEBUG
 
 # Link-time optimization flags (must match CXXFLAGS)
 LFLAGS =

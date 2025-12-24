@@ -109,7 +109,8 @@ struct SearchStack {
     int staticEval;
     int correctedStaticEval;  // Static eval after correction history adjustment
     int moveCount;
-    int extensions;       // Total extensions in this path (for limiting)
+    int extensions;           // Total extensions in this path (for limiting)
+    int doubleExtensions;     // Count of double extensions (for limiting)
     bool inCheck;
     bool ttPv;
     bool ttHit;

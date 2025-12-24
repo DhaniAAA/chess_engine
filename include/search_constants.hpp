@@ -1,12 +1,6 @@
 #ifndef SEARCH_CONSTANTS_HPP
 #define SEARCH_CONSTANTS_HPP
 
-// ============================================================================
-// Search Constants and Parameters
-// ============================================================================
-// This file centralizes all search-related constants to make tuning easier
-// and reduce magic numbers scattered throughout the codebase.
-// ============================================================================
 
 namespace SearchParams {
 
@@ -33,7 +27,8 @@ constexpr int RazorMargin[4] = { 0, 300, 500, 700 };
 constexpr int RFPMargin[7] = { 0, 80, 160, 240, 320, 400, 480 };
 
 // Late move pruning thresholds (skip quiet moves after this many tries at low depth)
-constexpr int LMPThreshold[8] = { 0, 8, 12, 18, 25, 33, 42, 52 };
+// More generous thresholds to avoid missing tactics
+constexpr int LMPThreshold[8] = { 0, 5, 8, 13, 19, 26, 34, 43 };
 
 // Maximum depth for specific pruning techniques
 constexpr int FUTILITY_MAX_DEPTH = 6;
@@ -43,9 +38,9 @@ constexpr int LMP_MAX_DEPTH = 7;
 constexpr int SEE_QUIET_MAX_DEPTH = 3;
 constexpr int SEE_CAPTURE_MAX_DEPTH = 4;
 
-// SEE thresholds
-constexpr int SEE_CAPTURE_THRESHOLD_PER_DEPTH = -50;
-constexpr int SEE_QUIET_THRESHOLD_PER_DEPTH = -100;
+// SEE thresholds - more conservative to preserve tactical moves
+constexpr int SEE_CAPTURE_THRESHOLD_PER_DEPTH = -20;
+constexpr int SEE_QUIET_THRESHOLD_PER_DEPTH = -50;
 
 // History Leaf Pruning threshold (prune moves with very negative history)
 constexpr int HISTORY_LEAF_PRUNING_DEPTH = 4;    // Max depth for history pruning
@@ -107,6 +102,40 @@ constexpr int IIR_CUT_REDUCTION = 2;         // Reduction in cut nodes (more agg
 
 constexpr int QSEARCH_CHECK_DEPTH = 2;       // Depth to search quiet checks in qsearch
 constexpr int DELTA_PRUNING_MARGIN = 200;    // Delta pruning margin
+
+// ============================================================================
+// LMR Tuning Parameters
+// ============================================================================
+
+constexpr double LMR_BASE = 0.50;            // Base reduction factor (more conservative)
+constexpr double LMR_DIVISOR = 2.40;         // Divisor for log formula (closer to Stockfish)
+
+// ============================================================================
+// Extension Control Parameters
+// ============================================================================
+
+// Double/Triple Extension Prevention
+constexpr int DOUBLE_EXT_LIMIT = 6;          // Max double extensions allowed
+constexpr int MAX_EXTENSION_PLY_RATIO = 2;   // Ply must not exceed depth*ratio after extensions
+
+// Negative Extension (extend when expected fail-high fails)
+constexpr int NEG_EXT_THRESHOLD = 100;       // Score threshold below alpha to trigger
+constexpr int NEG_EXT_MIN_DEPTH = 6;         // Minimum depth for negative extension
+
+// ============================================================================
+// Dynamic SEE Thresholds
+// ============================================================================
+
+constexpr int SEE_CAPTURE_IMPROVING_FACTOR = 20;    // More lenient when improving
+constexpr int SEE_CAPTURE_NOT_IMPROVING_FACTOR = 40; // Stricter when not improving
+constexpr int SEE_QUIET_IMPROVING_FACTOR = 40;       // Quiet SEE when improving
+constexpr int SEE_QUIET_NOT_IMPROVING_FACTOR = 70;   // Quiet SEE when not improving
+
+// ============================================================================
+// History Pruning Enhancement
+// ============================================================================
+
+constexpr int COUNTER_MOVE_HISTORY_BONUS = 2; // Weight for countermove history in LMR
 
 } // namespace SearchParams
 

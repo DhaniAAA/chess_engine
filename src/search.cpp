@@ -28,7 +28,10 @@ void init_lmr_table() {
             if (d == 0 || m == 0) {
                 LMRTable[d][m] = 0;
             } else {
-                LMRTable[d][m] = static_cast<int>(0.5 + std::log(d) * std::log(m) / 2.0);
+                // Tunable LMR formula: base + log(d) * log(m) / divisor
+                // More aggressive reductions for late moves at high depths
+                double reduction = SearchParams::LMR_BASE + std::log(d) * std::log(m) / SearchParams::LMR_DIVISOR;
+                LMRTable[d][m] = static_cast<int>(reduction);
             }
         }
     }
@@ -62,6 +65,7 @@ Search::Search() : stopped(false), searching(false), rootBestMove(MOVE_NONE),
         stack[i].killers[0] = MOVE_NONE;
         stack[i].killers[1] = MOVE_NONE;
         stack[i].extensions = 0;
+        stack[i].doubleExtensions = 0;
         stack[i].nullMovePruned = false;
         stack[i].contHistory = nullptr;
     }
@@ -551,17 +555,34 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     ss->staticEval = staticEval;
     ss->correctedStaticEval = correctedStaticEval;
 
-    // Improving Heuristic
-    // We are improving if the current static eval is better than the one 2 plies ago
-    // ss is stack[ply+2], so grandparent is stack[ply]
+    // Enhanced Improving Heuristic
     bool improving = false;
-    if (ply >= 2 && !inCheck && ss->staticEval != VALUE_NONE && stack[ply].staticEval != VALUE_NONE) {
-        if (ss->staticEval >= stack[ply].staticEval) {
+    bool improving4ply = false;
+    int improvementDelta = 0;  // How much we improved (for LMR scaling)
+
+    if (!inCheck && ss->staticEval != VALUE_NONE) {
+        // 2-ply ago check (grandparent position)
+        // ss is stack[ply+2], so 2-ply ago is stack[ply]
+        if (ply >= 2 && stack[ply].staticEval != VALUE_NONE) {
+            if (ss->staticEval >= stack[ply].staticEval) {
+                improving = true;
+                improvementDelta = ss->staticEval - stack[ply].staticEval;
+            }
+        } else {
+            // If 2-ply ago was in check or unavailable, assume improving
             improving = true;
+        }
+
+        // 4-ply ago check (great-grandparent's grandparent)
+        // stack[ply] is 2-ply ago, so stack[ply-2] is 4-ply ago
+        if (ply >= 4 && stack[ply - 2].staticEval != VALUE_NONE) {
+            if (ss->staticEval >= stack[ply - 2].staticEval) {
+                improving4ply = true;
+            }
         }
     }
 
-    // Also consider improving if we are in check (to avoid aggressive pruning)
+    // If in check, assume improving to avoid over-pruning
     if (inCheck) improving = true;
 
     // Razoring (at low depths, if eval is far below alpha)
@@ -603,9 +624,6 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     bool doubleNullMove = (ply >= 1 && ply + 1 < MAX_PLY + 4 && stack[ply + 1].nullMovePruned);
 
     // Null move pruning
-    // Conditions: not PV, not in check, eval >= beta, have non-pawn material,
-    // not after a null move (avoid double null move)
-    // Use corrected eval for more accurate pruning decisions
     if (!pvNode && !inCheck && correctedStaticEval >= beta && depth >= 3 &&
         hasNonPawnMaterial && !doubleNullMove) {
 
@@ -648,11 +666,7 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         }
     }
 
-    // ========================================================================
     // Multi-Cut Pruning
-    // If several moves cause a beta cutoff in a shallow search, this node
-    // is very likely to fail high, so we can cut it early.
-    // ========================================================================
     if (!pvNode && !inCheck && depth >= MULTI_CUT_DEPTH && cutNode) {
         int multiCutCount = 0;
         int movesTried = 0;
@@ -699,11 +713,7 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         }
     }
 
-    // ========================================================================
     // ProbCut (Probabilistic Cutoff)
-    // Try to prove a beta cutoff using a shallow search of captures only.
-    // If a capture already scores well above beta, the full search likely will too.
-    // ========================================================================
     if (!pvNode && !inCheck && depth >= PROBCUT_DEPTH &&
         std::abs(beta) < VALUE_MATE_IN_MAX_PLY) {
 
@@ -753,11 +763,7 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         }
     }
 
-    // ========================================================================
     // Internal Iterative Reductions (IIR) - Replaces IID
-    // If we have no hash move, reduce depth instead of doing expensive IID
-    // This is more efficient than IID and achieves similar results
-    // ========================================================================
     if (!ttMove && depth >= IIR_MIN_DEPTH) {
         if (pvNode) {
             depth -= IIR_PV_REDUCTION;
@@ -782,25 +788,18 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     const bool rootNode = (ply == 0);
 
     // Get continuation history entries for move ordering
-    // ss-1 = 1-ply ago, ss-2 = 2-ply ago (ss already defined above)
-    // Guard against array overflow with ply + 1 check
     const ContinuationHistoryEntry* contHist1ply = (ply >= 1 && ply + 1 < MAX_PLY + 4 && stack[ply + 1].contHistory) ?
                                                     stack[ply + 1].contHistory : nullptr;
     const ContinuationHistoryEntry* contHist2ply = (ply >= 2 && ply < MAX_PLY + 4 && stack[ply].contHistory) ?
                                                     stack[ply].contHistory : nullptr;
 
-    // For root node with MultiPV, we iterate through rootMoves directly
-    // For non-root nodes, we use MovePicker
     MovePicker mp(board, ttMove, ply, killers, counterMoves, history, previousMove,
                   contHist1ply, contHist2ply, captureHistory);
 
-    // Root move index for iterating through rootMoves (only used at root)
     size_t rootMoveIdx = 0;
     Move m;
 
     // Main move loop
-    // At root node, iterate through rootMoves starting from pvIdx
-    // At other nodes, use MovePicker
     while (true) {
         // Get next move based on whether we're at root or not
         if (rootNode) {
@@ -811,7 +810,6 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             m = rootMoves[rootMoveIdx + pvIdx].move;
             ++rootMoveIdx;
         } else {
-            // At non-root nodes, use MovePicker
             m = mp.next_move();
             if (m == MOVE_NONE) {
                 break;  // No more moves
@@ -839,21 +837,49 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         PieceType movedPt = type_of(movedPiece);
         Color us = board.side_to_move();
 
-        // [PERBAIKAN] Detect if this move creates a significant threat
-        // (e.g., attacking queen/rook, creating discovered attack)
+        // Enhanced Threat Detection
         bool createsThreat = false;
+        bool createsFork = false;
+
         if (!isCapture && !givesCheck) {
-            // Check if move attacks valuable enemy pieces after the move
-            Bitboard attacksAfter = attacks_bb(movedPt, m.to(), board.pieces() ^ square_bb(m.from()));
+            // Calculate attacks from the destination square
+            Bitboard newOccupied = board.pieces() ^ square_bb(m.from());
+            Bitboard attacksAfter = attacks_bb(movedPt, m.to(), newOccupied);
+
+            // Valuable enemy pieces (king excluded - that would be check)
             Bitboard valuableEnemies = board.pieces(~us, QUEEN) | board.pieces(~us, ROOK);
-            if (attacksAfter & valuableEnemies) {
+            Bitboard allMinorsAndUp = valuableEnemies | board.pieces(~us, BISHOP) | board.pieces(~us, KNIGHT);
+
+            // Check for threats to valuable pieces
+            Bitboard threatened = attacksAfter & valuableEnemies;
+            if (threatened) {
                 createsThreat = true;
+            }
+
+            // Check for forks (attacking 2+ minor/major pieces)
+            Bitboard forkedPieces = attacksAfter & allMinorsAndUp;
+            if (popcount(forkedPieces) >= 2) {
+                createsFork = true;
+                createsThreat = true;  // Fork implies threat
+            }
+
+            // Also consider discovered attack potential
+            Bitboard ourSliders = board.pieces(us, BISHOP, QUEEN) | board.pieces(us, ROOK, QUEEN);
+            Bitboard enemyKing = square_bb(board.king_square(~us));
+            for (Bitboard sliders = ourSliders; sliders; ) {
+                Square sliderSq = pop_lsb(sliders);
+                if (sliderSq == m.from()) continue;  // We're moving this piece
+
+                Bitboard sliderAttacks = attacks_bb(type_of(board.piece_on(sliderSq)), sliderSq, newOccupied);
+                if (sliderAttacks & enemyKing) {
+                    if (sliderAttacks & board.pieces(~us, QUEEN)) {
+                        createsThreat = true;
+                    }
+                }
             }
         }
 
-        // ====================================================================
         // Pre-move pruning (before making the move)
-        // ====================================================================
 
         // Late Move Pruning (LMP)
         // Skip late quiet moves at low depths when we're not improving
@@ -877,24 +903,34 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             }
         }
 
+        // SEE Pruning with Dynamic Thresholds
+        // Thresholds vary based on improving status:
+        // - When improving: be more lenient (less pruning)
+        // - When not improving: be stricter (more pruning)
+
         // SEE pruning for captures
         // Skip losing captures at low depths
-        if (!pvNode && depth <= 4 && isCapture && !SEE::see_ge(board, m, -50 * depth)) {
-            continue;
+        if (!pvNode && depth <= 4 && isCapture) {
+            int seeThreshold = improving ?
+                -SEE_CAPTURE_IMPROVING_FACTOR * depth :
+                -SEE_CAPTURE_NOT_IMPROVING_FACTOR * depth;
+            if (!SEE::see_ge(board, m, seeThreshold)) {
+                continue;
+            }
         }
 
         // SEE pruning for quiet moves (prune if quiet move has very negative SEE)
-        // [PERBAIKAN] Skip SEE pruning for checking/threatening moves
-        if (!pvNode && !inCheck && depth <= 3 && !isCapture && !givesCheck && !createsThreat &&
-            !SEE::see_ge(board, m, -100 * depth)) {
-            continue;
+        // Skip SEE pruning for checking/threatening moves
+        if (!pvNode && !inCheck && depth <= 3 && !isCapture && !givesCheck && !createsThreat) {
+            int seeThreshold = improving ?
+                -SEE_QUIET_IMPROVING_FACTOR * depth :
+                -SEE_QUIET_NOT_IMPROVING_FACTOR * depth;
+            if (!SEE::see_ge(board, m, seeThreshold)) {
+                continue;
+            }
         }
 
-        // ====================================================================
         // History Leaf Pruning
-        // Prune quiet moves with very negative history scores at low depths.
-        // These moves have historically failed to produce cutoffs.
-        // ====================================================================
         if (!pvNode && !inCheck && depth <= HISTORY_LEAF_PRUNING_DEPTH &&
             !isCapture && !isPromotion && !givesCheck && !createsThreat &&
             bestScore > VALUE_MATED_IN_MAX_PLY) {
@@ -904,12 +940,13 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             }
         }
 
-        // ====================================================================
         // Extensions
-        // ====================================================================
 
         int extension = 0;
         int currentExtensions = (ss->ply >= 2 && ply >= 2) ? stack[ply + 1].extensions : 0;
+
+        // Double extension counter - track how many times we've double-extended
+        int doubleExtensions = (ply >= 1) ? stack[ply + 1].doubleExtensions : 0;
 
         // Check extension (limited to MAX_EXTENSIONS total in path)
         if (givesCheck && currentExtensions < MAX_EXTENSIONS) {
@@ -942,11 +979,31 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             if (singularScore < singularBeta) {
                 // TT move is singular - extend it
                 extension = 1;
+
+                // Double extension: if singular margin is large and within limit
+                if (!pvNode && singularScore < singularBeta - 50 &&
+                    doubleExtensions < DOUBLE_EXT_LIMIT) {
+                    extension = 2;
+                    ++doubleExtensions;  // Track for child nodes
+                }
             } else if (singularBeta >= beta) {
                 // Multi-cut: if the singular search already found a beta cutoff,
                 // we can return beta early
                 return singularBeta;
             }
+
+            // Negative Extension
+            else if (cutNode && depth >= NEG_EXT_MIN_DEPTH &&
+                     singularScore < alpha - NEG_EXT_THRESHOLD) {
+                // TT move failed but there's no good alternative either
+                // This indicates a tricky position - extend search
+                extension = 1;
+            }
+        }
+
+        // Triple Extension Prevention
+        if (extension > 0 && ply >= rootDepth * MAX_EXTENSION_PLY_RATIO) {
+            extension = 0;  // Suppress extension to prevent explosion
         }
 
         int newDepth = depth - 1 + extension;
@@ -954,23 +1011,19 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         // Track extensions in path
         if (ss->ply >= 0 && ss->ply < MAX_PLY) {
             stack[ply + 2].extensions = currentExtensions + extension;
+            stack[ply + 2].doubleExtensions = doubleExtensions;
         }
 
-        // ====================================================================
         // Late Move Reductions (LMR) - IMPROVED TUNING
-        // ====================================================================
-
         int reduction = 0;
         if (depth >= 2 && moveCount > 1 && !isCapture && !isPromotion) {
             reduction = LMRTable[std::min(depth, 63)][std::min(moveCount, 63)];
 
-            // ----------------------------------------------------------------
             // Reduction increases (search less deep)
-            // ----------------------------------------------------------------
 
             // Reduce more in cut nodes (expected to fail high)
             if (cutNode) {
-                reduction += 2;
+                reduction += 1;  // Reduced from +2 to preserve tactics
             }
 
             // Reduce more if not improving (position getting worse)
@@ -978,14 +1031,14 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                 reduction += 1;
             }
 
-            // Reduce more for very late moves
-            if (moveCount > 10) {
+            // NOTE: Removed 4-ply improving check - was causing over-pruning
+
+            // Reduce more for very late moves (after move 15, not 10)
+            if (moveCount > 15) {
                 reduction += 1;
             }
 
-            // ----------------------------------------------------------------
             // Reduction decreases (search deeper)
-            // ----------------------------------------------------------------
 
             // Reduce less in PV nodes (critical path)
             if (pvNode) {
@@ -1007,6 +1060,11 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                 reduction -= 2;
             }
 
+            // Reduce even less for fork moves (attacking 2+ pieces)
+            if (createsFork) {
+                reduction -= 1;  // Additional reduction on top of createsThreat
+            }
+
             // Reduce less for killer/counter moves (proven good in siblings)
             if (killers.is_killer(ply, m) ||
                 (previousMove && m == counterMoves.get(board.piece_on(previousMove.to()), previousMove.to()))) {
@@ -1018,9 +1076,13 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                 reduction -= 1;
             }
 
-            // ----------------------------------------------------------------
+            // Reduce less if we're improving significantly (strong upward trend)
+            // Scale: every 50cp improvement reduces by 1 ply (max 2)
+            if (improvementDelta > 0) {
+                reduction -= std::min(improvementDelta / 50, 2);
+            }
+
             // History-based adjustment (more granular)
-            // ----------------------------------------------------------------
             int histScore = history.get(board.side_to_move(), m);
 
             // Add continuation history scores for better accuracy
@@ -1029,25 +1091,19 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                 histScore += contHist1ply->get(pt, m.to());
             }
             if (contHist2ply) {
-                histScore += contHist2ply->get(pt, m.to()) / 2;
+                // Weight 2-ply continuation history by configurable factor
+                histScore += contHist2ply->get(pt, m.to()) / COUNTER_MOVE_HISTORY_BONUS;
             }
 
             // Scale history adjustment: [-3, +3] range
             reduction -= std::clamp(histScore / 4000, -3, 3);
 
-            // ----------------------------------------------------------------
             // Clamp reduction
-            // ----------------------------------------------------------------
             // Don't reduce below 1 or into negative/qsearch
             reduction = std::clamp(reduction, 0, newDepth - 1);
         }
 
-        // ====================================================================
         // Make the move
-        // ====================================================================
-
-        // Set up continuation history entry for this move
-        // so child nodes can use it for 1-ply ago reference
         Piece movedPiece2 = board.piece_on(m.from());
         if (ply + 2 < MAX_PLY + 4) {
             stack[ply + 2].contHistory = contHistory.get_entry(movedPiece2, m.to());
@@ -1160,12 +1216,7 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                         }
                     } else {
                         // Update capture history
-                        Piece captured = board.piece_on(m.to()); // This is wrong because move is already undone? No, wait.
-                        // board.undo_move(m) was called at line 1002.
-                        // So board.piece_on(m.to()) will return the piece that WAS there?
-                        // No, undo_move(m) restores the board. So m.to() has the captured piece again if we captured something?
-                        // Wait, undo_move restores the captured piece.
-                        // So board.piece_on(m.to()) is correct if it was a capture.
+                        Piece captured = board.piece_on(m.to());
                         if (captured != NO_PIECE) {
                              PieceType capturedPt = type_of(captured);
                              int bonus = depth * depth;
@@ -1203,11 +1254,9 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                   bound, depth, bestMove, TT.generation());
     }
 
-    // ========================================================================
     // Update Correction History
     // When we have a reliable search result (exact bound or fail high/low),
     // update the correction history to improve future static eval accuracy
-    // ========================================================================
     if (!inCheck && staticEval != VALUE_NONE && depth >= 3) {
         // Calculate the difference between search result and static eval
         // Positive diff means eval was too pessimistic, negative means too optimistic
@@ -1224,11 +1273,7 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     return bestScore;
 }
 
-// ============================================================================
 // Quiescence Search
-// [PERBAIKAN] Added qsDepth parameter to search quiet checks at first plies
-// ============================================================================
-
 int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
     ++searchStats.nodes;
 
@@ -1246,13 +1291,13 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
         return evaluate(board); // atau return alpha/beta
     }
 
-    // [PERBAIKAN] Clear PV line for this ply to prevent stale data from leaking
+    // Clear PV line for this ply to prevent stale data from leaking
     // to parent nodes, which could cause illegal move output
     pvLines[ply].clear();
 
     bool inCheck = board.in_check();
 
-    // [PERBAIKAN] Jika dalam skak, kita HARUS cek semua legal evasions untuk detect skakmat
+    // Jika dalam skak, kita HARUS cek semua legal evasions untuk detect skakmat
     // Gunakan counter terpisah untuk legal moves saat dalam skak
     int legalMoveCount = 0;
 
@@ -1269,7 +1314,6 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
     }
 
     // Generate moves based on state and qsDepth
-    // [PERBAIKAN] At first plies of qsearch (qsDepth > 0), also generate quiet checks
     MoveList moves;
     MoveList quietChecks;  // Separate list for quiet checking moves
 
@@ -1298,7 +1342,7 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
     TTEntry* tte = TT.probe(board.key(), ttHit);
     Move ttMove = ttHit ? tte->move() : MOVE_NONE;
 
-    // [PERBAIKAN] Validasi ttMove di qsearch dengan is_pseudo_legal dan is_legal
+    // Validasi ttMove di qsearch dengan is_pseudo_legal dan is_legal
     if (ttMove != MOVE_NONE && (!MoveGen::is_pseudo_legal(board, ttMove) || !MoveGen::is_legal(board, ttMove))) {
         ttMove = MOVE_NONE;
         ttHit = false;
@@ -1315,7 +1359,7 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
             continue;
         }
 
-        // [PERBAIKAN] Hitung semua legal moves jika dalam skak (untuk detect skakmat)
+        // Hitung semua legal moves jika dalam skak (untuk detect skakmat)
         if (inCheck) {
             ++legalMoveCount;
         }
@@ -1355,7 +1399,7 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
         }
     }
 
-    // [PERBAIKAN] Then search quiet checks if any (hanya jika TIDAK dalam skak)
+    // Then search quiet checks if any (hanya jika TIDAK dalam skak)
     if (!inCheck) {
         for (size_t i = 0; i < quietChecks.size(); ++i) {
             m = quietChecks[i].move;
@@ -1393,7 +1437,7 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
         }
     }
 
-    // [PERBAIKAN] Checkmate detection - menggunakan legalMoveCount yang benar
+    // Checkmate detection - menggunakan legalMoveCount yang benar
     if (inCheck && legalMoveCount == 0) {
         return -VALUE_MATE + ply;
     }
@@ -1401,10 +1445,7 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
     return bestScore;
 }
 
-// ============================================================================
 // Static Evaluation - Using Advanced HCE from eval.hpp
-// ============================================================================
-
 int Search::evaluate(const Board& board) {
     // Check for known drawn endgames
     if (Tablebase::EndgameRules::is_known_draw(board)) {
@@ -1441,10 +1482,7 @@ int Search::evaluate(const Board& board, int alpha, int beta) {
     return score;
 }
 
-// ============================================================================
 // UCI Output
-// ============================================================================
-
 void Search::report_info(Board& board, int depth, int score, const PVLine& pv, int multiPVIdx) {
     auto now = std::chrono::steady_clock::now();
     U64 elapsed = static_cast<U64>(
