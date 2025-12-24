@@ -4,8 +4,7 @@
 #
 
 # define the Cpp compiler to use
-# Untuk g++ 64-bit
-CXX = x86_64-w64-mingw32-g++
+CXX = g++
 
 # Mode Release (Default)
 # CXXFLAGS := -std=c++17 -Wall -Wextra -O3 -march=native -DNDEBUG
