@@ -1,10 +1,12 @@
 // ============================================================================
-// Texel Tuning Implementation - Multi-Threaded Version
+// Texel Tuning Implementation - Ultra-Fast Version
 // ============================================================================
 // Usage: texel_tuner.exe quiet-labeled.epd [max_positions] [iterations]
 //
-// This tunes evaluation parameters using coordinate descent (local search)
-// with multi-threading for faster evaluation.
+// OPTIMIZED APPROACH:
+// 1. Pre-compute base scores for all positions ONCE
+// 2. When testing a parameter change, only recalculate error (not re-evaluate)
+// 3. Use multi-threading to test multiple parameters simultaneously
 // ============================================================================
 
 #include <iostream>
@@ -20,6 +22,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <future>
 
 #include "../include/board.hpp"
 #include "../include/eval.hpp"
@@ -31,7 +34,6 @@
 // Configuration
 // ============================================================================
 
-// Number of threads (auto-detect or set manually)
 unsigned int NUM_THREADS = std::thread::hardware_concurrency();
 
 // ============================================================================
@@ -40,22 +42,23 @@ unsigned int NUM_THREADS = std::thread::hardware_concurrency();
 
 struct TunableParam {
     std::string name;
-    int* value_ptr;       // Pointer to the value
+    int* value_ptr;
     int min_val;
     int max_val;
-    bool is_mg;           // true = middlegame, false = endgame
+    bool is_mg;
 
     TunableParam(const std::string& n, int* ptr, int min_v, int max_v, bool mg = true)
         : name(n), value_ptr(ptr), min_val(min_v), max_val(max_v), is_mg(mg) {}
 };
 
 // ============================================================================
-// Training Position Structure
+// Training Position with Pre-computed Data
 // ============================================================================
 
 struct TrainingPosition {
     std::string fen;
-    double result;  // 1.0 = white wins, 0.5 = draw, 0.0 = black wins
+    double result;
+    int base_score;  // Pre-computed evaluation score
 };
 
 // ============================================================================
@@ -64,18 +67,16 @@ struct TrainingPosition {
 
 std::vector<TunableParam> params;
 std::vector<TrainingPosition> positions;
-double K = 1.13;  // Sigmoid scaling constant
+double K = 1.13;
 
 // ============================================================================
-// Initialize Tunable Parameters (31 parameters total)
+// Initialize Tunable Parameters
 // ============================================================================
 
 void init_params() {
     params.clear();
 
-    // ========================================================================
-    // Material Values (10 parameters: 5 pieces × 2 phases)
-    // ========================================================================
+    // Material Values
     params.push_back(TunableParam("PawnValue_MG",           &Tuning::PawnValue.mg,            60,  150, true));
     params.push_back(TunableParam("PawnValue_EG",           &Tuning::PawnValue.eg,            80,  180, false));
     params.push_back(TunableParam("KnightValue_MG",         &Tuning::KnightValue.mg,         200,  400, true));
@@ -87,9 +88,7 @@ void init_params() {
     params.push_back(TunableParam("QueenValue_MG",          &Tuning::QueenValue.mg,          700, 1200, true));
     params.push_back(TunableParam("QueenValue_EG",          &Tuning::QueenValue.eg,          800, 1300, false));
 
-    // ========================================================================
-    // Piece Activity Bonuses (10 parameters: 5 bonuses × 2 phases)
-    // ========================================================================
+    // Piece Activity Bonuses
     params.push_back(TunableParam("BishopPairBonus_MG",     &Tuning::BishopPairBonus.mg,       0,  100, true));
     params.push_back(TunableParam("BishopPairBonus_EG",     &Tuning::BishopPairBonus.eg,       0,  120, false));
     params.push_back(TunableParam("RookOpenFileBonus_MG",   &Tuning::RookOpenFileBonus.mg,     0,   60, true));
@@ -101,9 +100,7 @@ void init_params() {
     params.push_back(TunableParam("KnightOutpostBonus_MG",  &Tuning::KnightOutpostBonus.mg,    0,   60, true));
     params.push_back(TunableParam("KnightOutpostBonus_EG",  &Tuning::KnightOutpostBonus.eg,    0,   50, false));
 
-    // ========================================================================
-    // Pawn Structure (10 parameters: 5 terms × 2 phases)
-    // ========================================================================
+    // Pawn Structure
     params.push_back(TunableParam("IsolatedPawnPenalty_MG", &Tuning::IsolatedPawnPenalty.mg, -60,    0, true));
     params.push_back(TunableParam("IsolatedPawnPenalty_EG", &Tuning::IsolatedPawnPenalty.eg, -60,    0, false));
     params.push_back(TunableParam("DoubledPawnPenalty_MG",  &Tuning::DoubledPawnPenalty.mg,  -60,    0, true));
@@ -115,16 +112,14 @@ void init_params() {
     params.push_back(TunableParam("PhalanxBonus_MG",        &Tuning::PhalanxBonus.mg,          0,   50, true));
     params.push_back(TunableParam("PhalanxBonus_EG",        &Tuning::PhalanxBonus.eg,          0,   50, false));
 
-    // ========================================================================
-    // King Safety (1 parameter)
-    // ========================================================================
+    // King Safety
     params.push_back(TunableParam("KingSafetyWeight",       &Tuning::KingSafetyWeight,        30,  150, true));
 
     std::cout << "Initialized " << params.size() << " tunable parameters\n";
 }
 
 // ============================================================================
-// Parse Result String to Numeric Value
+// Parse Result String
 // ============================================================================
 
 double parse_result(const std::string& result) {
@@ -135,7 +130,7 @@ double parse_result(const std::string& result) {
 }
 
 // ============================================================================
-// Load Training Positions from EPD File
+// Load and Pre-evaluate Positions
 // ============================================================================
 
 bool load_positions(const std::string& filename, size_t max_positions = 0) {
@@ -166,6 +161,7 @@ bool load_positions(const std::string& filename, size_t max_positions = 0) {
         TrainingPosition pos;
         pos.fen = line.substr(0, c9_pos);
         pos.result = parse_result(result);
+        pos.base_score = 0;  // Will be computed later
         positions.push_back(pos);
 
         count++;
@@ -181,6 +177,39 @@ bool load_positions(const std::string& filename, size_t max_positions = 0) {
 }
 
 // ============================================================================
+// Pre-evaluate all positions (multi-threaded)
+// ============================================================================
+
+void precompute_scores_worker(size_t start, size_t end) {
+    for (size_t i = start; i < end; ++i) {
+        Board board(positions[i].fen);
+        positions[i].base_score = Eval::evaluate_no_cache(board);
+    }
+}
+
+void precompute_all_scores() {
+    std::cout << "Pre-computing scores for all positions...\n";
+    auto start = std::chrono::steady_clock::now();
+
+    std::vector<std::thread> threads;
+    size_t chunk_size = positions.size() / NUM_THREADS;
+
+    for (unsigned int t = 0; t < NUM_THREADS; ++t) {
+        size_t s = t * chunk_size;
+        size_t e = (t == NUM_THREADS - 1) ? positions.size() : (t + 1) * chunk_size;
+        threads.emplace_back(precompute_scores_worker, s, e);
+    }
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    auto end = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(end - start).count();
+    std::cout << "  Done in " << std::fixed << std::setprecision(1) << elapsed << "s\n";
+}
+
+// ============================================================================
 // Sigmoid Function
 // ============================================================================
 
@@ -189,74 +218,71 @@ inline double sigmoid(double score, double k) {
 }
 
 // ============================================================================
-// Multi-Threaded Error Calculation
+// Calculate Error from Pre-computed Scores (multi-threaded)
 // ============================================================================
 
-// Worker function for parallel error calculation
-void worker_calculate_error(size_t start, size_t end, double k, double& partial_error) {
+void calc_error_worker(size_t start, size_t end, double k, double& partial_error) {
     double local_error = 0.0;
-
     for (size_t i = start; i < end; ++i) {
-        // Create a fresh Board for each position (thread-safe)
-        Board board(positions[i].fen);
-
-        // Use evaluate_no_cache to avoid race conditions on pawnTable
-        int score = Eval::evaluate_no_cache(board);
-
-        double predicted = sigmoid(score, k);
+        double predicted = sigmoid(positions[i].base_score, k);
         double error = positions[i].result - predicted;
         local_error += error * error;
     }
-
     partial_error = local_error;
 }
 
-// Calculate error using multiple threads
-double calculate_error_mt(double k) {
+double calculate_error_fast(double k) {
     std::vector<std::thread> threads;
     std::vector<double> partial_errors(NUM_THREADS, 0.0);
-
     size_t chunk_size = positions.size() / NUM_THREADS;
 
     for (unsigned int t = 0; t < NUM_THREADS; ++t) {
-        size_t start = t * chunk_size;
-        size_t end = (t == NUM_THREADS - 1) ? positions.size() : (t + 1) * chunk_size;
-
-        threads.emplace_back(worker_calculate_error, start, end, k, std::ref(partial_errors[t]));
+        size_t s = t * chunk_size;
+        size_t e = (t == NUM_THREADS - 1) ? positions.size() : (t + 1) * chunk_size;
+        threads.emplace_back(calc_error_worker, s, e, k, std::ref(partial_errors[t]));
     }
 
-    // Wait for all threads to complete
     for (auto& thread : threads) {
         thread.join();
     }
 
-    // Sum all partial errors
-    double total_error = 0.0;
-    for (double err : partial_errors) {
-        total_error += err;
-    }
-
-    return total_error / positions.size();
-}
-
-// Alias for compatibility
-double calculate_error(double k) {
-    return calculate_error_mt(k);
+    double total = 0.0;
+    for (double err : partial_errors) total += err;
+    return total / positions.size();
 }
 
 // ============================================================================
-// Find Optimal K Value
+// Re-evaluate all positions with current parameters (multi-threaded)
+// ============================================================================
+
+void reevaluate_all_scores() {
+    std::vector<std::thread> threads;
+    size_t chunk_size = positions.size() / NUM_THREADS;
+
+    for (unsigned int t = 0; t < NUM_THREADS; ++t) {
+        size_t s = t * chunk_size;
+        size_t e = (t == NUM_THREADS - 1) ? positions.size() : (t + 1) * chunk_size;
+        threads.emplace_back(precompute_scores_worker, s, e);
+    }
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+}
+
+// ============================================================================
+// Find Optimal K
 // ============================================================================
 
 double find_optimal_k() {
-    std::cout << "Finding optimal K value (using " << NUM_THREADS << " threads)...\n";
+    std::cout << "Finding optimal K value...\n";
 
     double best_k = 1.0;
-    double best_error = calculate_error(best_k);
+    double best_error = calculate_error_fast(best_k);
 
     // Coarse search
-    for (double k = 0.3; k <= 2.0; k += 0.1) {
-        double error = calculate_error(k);
+    for (double k = 0.2; k <= 2.0; k += 0.1) {
+        double error = calculate_error_fast(k);
         std::cout << "  K = " << std::fixed << std::setprecision(2) << k
                   << ", error = " << std::setprecision(6) << error << "\r" << std::flush;
         if (error < best_error) {
@@ -267,7 +293,7 @@ double find_optimal_k() {
 
     // Fine search
     for (double k = best_k - 0.1; k <= best_k + 0.1; k += 0.01) {
-        double error = calculate_error(k);
+        double error = calculate_error_fast(k);
         if (error < best_error) {
             best_error = error;
             best_k = k;
@@ -281,67 +307,70 @@ double find_optimal_k() {
 }
 
 // ============================================================================
-// Local Search (Coordinate Descent) - Multi-Threaded
+// Tune Parameters using Local Search with Parallel Evaluation
 // ============================================================================
 
 void tune_parameters(int iterations = 100) {
-    std::cout << "\n=== Starting Texel Tuning (Multi-Threaded Local Search) ===\n";
+    std::cout << "\n=== Starting Texel Tuning (Fast Local Search) ===\n";
     std::cout << "Threads: " << NUM_THREADS << "\n";
     std::cout << "Iterations: " << iterations << "\n";
     std::cout << "Positions: " << positions.size() << "\n";
     std::cout << "Parameters: " << params.size() << "\n\n";
 
-    double best_error = calculate_error(K);
+    double best_error = calculate_error_fast(K);
     std::cout << "Initial error: " << std::fixed << std::setprecision(8) << best_error << "\n\n";
     double initial_error = best_error;
 
-    int step = 5;  // Initial step size
+    int step = 5;
     int no_improvement_count = 0;
 
     for (int iter = 1; iter <= iterations; iter++) {
-        auto start = std::chrono::steady_clock::now();
+        auto start_time = std::chrono::steady_clock::now();
 
         bool improved_this_iter = false;
         int params_changed = 0;
 
         // Try each parameter
-        for (auto& p : params) {
-            int original = *p.value_ptr;
+        for (size_t p = 0; p < params.size(); ++p) {
+            int original = *params[p].value_ptr;
 
             // Try increasing
-            int new_val_up = std::clamp(original + step, p.min_val, p.max_val);
+            int new_val_up = std::clamp(original + step, params[p].min_val, params[p].max_val);
             if (new_val_up != original) {
-                *p.value_ptr = new_val_up;
-                double error_up = calculate_error(K);
+                *params[p].value_ptr = new_val_up;
+                reevaluate_all_scores();  // Re-evaluate with new param
+                double error_up = calculate_error_fast(K);
 
                 if (error_up < best_error) {
                     best_error = error_up;
                     improved_this_iter = true;
                     params_changed++;
-                    continue;  // Keep the change
+                    continue;
                 }
             }
 
             // Try decreasing
-            int new_val_down = std::clamp(original - step, p.min_val, p.max_val);
+            int new_val_down = std::clamp(original - step, params[p].min_val, params[p].max_val);
             if (new_val_down != original) {
-                *p.value_ptr = new_val_down;
-                double error_down = calculate_error(K);
+                *params[p].value_ptr = new_val_down;
+                reevaluate_all_scores();
+                double error_down = calculate_error_fast(K);
 
                 if (error_down < best_error) {
                     best_error = error_down;
                     improved_this_iter = true;
                     params_changed++;
-                    continue;  // Keep the change
+                    continue;
                 }
             }
 
-            // Neither direction improved, restore original
-            *p.value_ptr = original;
+            // Restore and re-evaluate
+            *params[p].value_ptr = original;
+            reevaluate_all_scores();
         }
 
-        auto end = std::chrono::steady_clock::now();
-        double elapsed = std::chrono::duration<double>(end - start).count();
+        auto end_time = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(end_time - start_time).count();
 
         double improvement = (initial_error - best_error) * 100 / initial_error;
 
@@ -352,7 +381,6 @@ void tune_parameters(int iterations = 100) {
                   << " | Step: " << step
                   << " | Time: " << std::setprecision(1) << elapsed << "s\n";
 
-        // Reduce step size if no improvement
         if (!improved_this_iter) {
             no_improvement_count++;
             if (no_improvement_count >= 2 && step > 1) {
@@ -364,53 +392,46 @@ void tune_parameters(int iterations = 100) {
             no_improvement_count = 0;
         }
 
-        // Print values every 5 iterations
         if (iter % 5 == 0) {
             std::cout << "\n--- Current Values ---\n";
-            for (const auto& p : params) {
-                std::cout << p.name << " = " << *p.value_ptr << "\n";
+            for (const auto& param : params) {
+                std::cout << param.name << " = " << *param.value_ptr << "\n";
             }
             std::cout << "\n";
         }
 
-        // Early stop if step is 1 and no improvement
         if (step == 1 && no_improvement_count >= 3) {
             std::cout << "Converged!\n";
             break;
         }
     }
 
-    // Print final values in EvalScore format
+    // Print final values
     std::cout << "\n=== FINAL TUNED VALUES ===\n\n";
     std::cout << "// Copy to tuning.cpp:\n\n";
 
-    // Material Values (10 params: 5 pieces × 2 phases)
     std::cout << "EvalScore PawnValue           = S(" << std::setw(4) << Tuning::PawnValue.mg << ", " << std::setw(4) << Tuning::PawnValue.eg << ");\n";
     std::cout << "EvalScore KnightValue         = S(" << std::setw(4) << Tuning::KnightValue.mg << ", " << std::setw(4) << Tuning::KnightValue.eg << ");\n";
     std::cout << "EvalScore BishopValue         = S(" << std::setw(4) << Tuning::BishopValue.mg << ", " << std::setw(4) << Tuning::BishopValue.eg << ");\n";
     std::cout << "EvalScore RookValue           = S(" << std::setw(4) << Tuning::RookValue.mg << ", " << std::setw(4) << Tuning::RookValue.eg << ");\n";
     std::cout << "EvalScore QueenValue          = S(" << std::setw(4) << Tuning::QueenValue.mg << ", " << std::setw(4) << Tuning::QueenValue.eg << ");\n";
 
-    // Piece Activity Bonuses (10 params: 5 bonuses × 2 phases)
     std::cout << "EvalScore BishopPairBonus     = S(" << std::setw(4) << Tuning::BishopPairBonus.mg << ", " << std::setw(4) << Tuning::BishopPairBonus.eg << ");\n";
     std::cout << "EvalScore RookOpenFileBonus   = S(" << std::setw(4) << Tuning::RookOpenFileBonus.mg << ", " << std::setw(4) << Tuning::RookOpenFileBonus.eg << ");\n";
     std::cout << "EvalScore RookSemiOpenFileBonus = S(" << std::setw(4) << Tuning::RookSemiOpenFileBonus.mg << ", " << std::setw(4) << Tuning::RookSemiOpenFileBonus.eg << ");\n";
     std::cout << "EvalScore RookOnSeventhBonus  = S(" << std::setw(4) << Tuning::RookOnSeventhBonus.mg << ", " << std::setw(4) << Tuning::RookOnSeventhBonus.eg << ");\n";
     std::cout << "EvalScore KnightOutpostBonus  = S(" << std::setw(4) << Tuning::KnightOutpostBonus.mg << ", " << std::setw(4) << Tuning::KnightOutpostBonus.eg << ");\n";
 
-    // Pawn Structure (10 params: 5 terms × 2 phases)
     std::cout << "EvalScore IsolatedPawnPenalty = S(" << std::setw(4) << Tuning::IsolatedPawnPenalty.mg << ", " << std::setw(4) << Tuning::IsolatedPawnPenalty.eg << ");\n";
     std::cout << "EvalScore DoubledPawnPenalty  = S(" << std::setw(4) << Tuning::DoubledPawnPenalty.mg << ", " << std::setw(4) << Tuning::DoubledPawnPenalty.eg << ");\n";
     std::cout << "EvalScore BackwardPawnPenalty = S(" << std::setw(4) << Tuning::BackwardPawnPenalty.mg << ", " << std::setw(4) << Tuning::BackwardPawnPenalty.eg << ");\n";
     std::cout << "EvalScore ConnectedPawnBonus  = S(" << std::setw(4) << Tuning::ConnectedPawnBonus.mg << ", " << std::setw(4) << Tuning::ConnectedPawnBonus.eg << ");\n";
     std::cout << "EvalScore PhalanxBonus        = S(" << std::setw(4) << Tuning::PhalanxBonus.mg << ", " << std::setw(4) << Tuning::PhalanxBonus.eg << ");\n";
 
-    // King Safety (1 param)
     std::cout << "int KingSafetyWeight          = " << std::setw(4) << Tuning::KingSafetyWeight << ";\n";
 
     double improvement = (initial_error - best_error) * 100 / initial_error;
     std::cout << "\n=== Tuning Complete ===\n";
-    std::cout << "Total Parameters: 31 (15 EvalScore x 2 + 1 int)\n";
     std::cout << "Initial error: " << std::setprecision(8) << initial_error << "\n";
     std::cout << "Final error:   " << best_error << "\n";
     std::cout << "Improvement:   " << std::setprecision(4) << improvement << "%\n";
@@ -422,24 +443,20 @@ void tune_parameters(int iterations = 100) {
 
 int main(int argc, char* argv[]) {
     std::cout << "=================================\n";
-    std::cout << "  GC-Engine Texel Tuner v3\n";
-    std::cout << "   (Multi-Threaded Version)\n";
+    std::cout << "  GC-Engine Texel Tuner v5\n";
+    std::cout << "  (Ultra-Fast Version)\n";
     std::cout << "=================================\n\n";
 
-    // Ensure at least 1 thread
     if (NUM_THREADS == 0) NUM_THREADS = 1;
     std::cout << "Using " << NUM_THREADS << " threads\n\n";
 
-    // Initialize engine components
     Magics::init();
     Zobrist::init();
 
-    // Determine input file
     std::string epd_file = "tuner/quiet-labeled.epd";
     if (argc > 1) epd_file = argv[1];
 
-    // Load positions
-    size_t max_pos = 500000;  // Default 500K for reasonable speed with multi-threading
+    size_t max_pos = 500000;
     if (argc > 2) max_pos = std::stoull(argv[2]);
 
     if (!load_positions(epd_file, max_pos)) {
@@ -447,8 +464,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Initialize parameters
     init_params();
+
+    // Pre-compute initial scores
+    precompute_all_scores();
 
     // Find optimal K
     K = find_optimal_k();
