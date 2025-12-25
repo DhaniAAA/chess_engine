@@ -305,6 +305,165 @@ private:
 };
 
 // ============================================================================
+// Capture History
+//
+// Tracks the success of capture moves indexed by [piece][to][captured_piece_type].
+// This provides better ordering of captures than pure MVV-LVA by learning
+// which captures are actually beneficial in practice.
+// ============================================================================
+
+class CaptureHistory {
+public:
+    static constexpr int MAX_HISTORY = 16384;
+
+    CaptureHistory() { clear(); }
+
+    void clear() {
+        for (int pc = 0; pc < PIECE_NB; ++pc) {
+            for (int sq = 0; sq < SQUARE_NB; ++sq) {
+                for (int cpt = 0; cpt < PIECE_TYPE_NB; ++cpt) {
+                    table[pc][sq][cpt] = 0;
+                }
+            }
+        }
+    }
+
+    // Get capture history score
+    int get(Piece movingPiece, Square to, PieceType capturedType) const {
+        return table[movingPiece][to][capturedType];
+    }
+
+    // Update capture history on successful/failed capture
+    void update(Piece movingPiece, Square to, PieceType capturedType, int bonus) {
+        int& entry = table[movingPiece][to][capturedType];
+        // Use gravity formula to prevent overflow (same as HistoryTable)
+        entry += bonus - entry * std::abs(bonus) / MAX_HISTORY;
+    }
+
+    // Bulk update: bonus for successful capture, penalty for failed captures
+    void update_capture_stats(Piece movingPiece, Square to, PieceType capturedType,
+                               int depth, bool causedCutoff) {
+        int bonus = causedCutoff ? depth * depth : -depth * depth / 2;
+        update(movingPiece, to, capturedType, bonus);
+    }
+
+private:
+    int table[PIECE_NB][SQUARE_NB][PIECE_TYPE_NB];
+};
+
+// ============================================================================
+// Move Ordering Statistics
+//
+// Tracks statistics about move ordering effectiveness for analysis and tuning.
+// Records how often different ordering mechanisms find the best move.
+// ============================================================================
+
+class MoveOrderStats {
+public:
+    MoveOrderStats() { reset(); }
+
+    void reset() {
+        ttMoveSuccess = 0;
+        ttMoveAttempts = 0;
+        killerMoveSuccess = 0;
+        killerMoveAttempts = 0;
+        counterMoveSuccess = 0;
+        counterMoveAttempts = 0;
+        historyMoveSuccess = 0;
+        historyMoveAttempts = 0;
+        captureHistorySuccess = 0;
+        captureHistoryAttempts = 0;
+        firstMoveSuccess = 0;
+        totalNodes = 0;
+    }
+
+    // Record when TT move causes cutoff
+    void record_tt_cutoff(bool success) {
+        ttMoveAttempts++;
+        if (success) ttMoveSuccess++;
+    }
+
+    // Record when killer move causes cutoff
+    void record_killer_cutoff(bool success) {
+        killerMoveAttempts++;
+        if (success) killerMoveSuccess++;
+    }
+
+    // Record when counter move causes cutoff
+    void record_counter_cutoff(bool success) {
+        counterMoveAttempts++;
+        if (success) counterMoveSuccess++;
+    }
+
+    // Record when history-ordered move causes cutoff
+    void record_history_cutoff(bool success) {
+        historyMoveAttempts++;
+        if (success) historyMoveSuccess++;
+    }
+
+    // Record capture history effectiveness
+    void record_capture_history(bool success) {
+        captureHistoryAttempts++;
+        if (success) captureHistorySuccess++;
+    }
+
+    // Record when first move is the best move
+    void record_first_move_best() {
+        firstMoveSuccess++;
+    }
+
+    void record_node() {
+        totalNodes++;
+    }
+
+    // Get statistics as percentages
+    double tt_success_rate() const {
+        return ttMoveAttempts > 0 ? 100.0 * ttMoveSuccess / ttMoveAttempts : 0.0;
+    }
+
+    double killer_success_rate() const {
+        return killerMoveAttempts > 0 ? 100.0 * killerMoveSuccess / killerMoveAttempts : 0.0;
+    }
+
+    double counter_success_rate() const {
+        return counterMoveAttempts > 0 ? 100.0 * counterMoveSuccess / counterMoveAttempts : 0.0;
+    }
+
+    double history_success_rate() const {
+        return historyMoveAttempts > 0 ? 100.0 * historyMoveSuccess / historyMoveAttempts : 0.0;
+    }
+
+    double capture_history_success_rate() const {
+        return captureHistoryAttempts > 0 ? 100.0 * captureHistorySuccess / captureHistoryAttempts : 0.0;
+    }
+
+    double first_move_rate() const {
+        return totalNodes > 0 ? 100.0 * firstMoveSuccess / totalNodes : 0.0;
+    }
+
+    // Get raw counts for detailed analysis
+    U64 get_total_nodes() const { return totalNodes; }
+    U64 get_tt_attempts() const { return ttMoveAttempts; }
+    U64 get_tt_success() const { return ttMoveSuccess; }
+    U64 get_first_move_success() const { return firstMoveSuccess; }
+
+private:
+    U64 ttMoveSuccess;
+    U64 ttMoveAttempts;
+    U64 killerMoveSuccess;
+    U64 killerMoveAttempts;
+    U64 counterMoveSuccess;
+    U64 counterMoveAttempts;
+    U64 historyMoveSuccess;
+    U64 historyMoveAttempts;
+    U64 captureHistorySuccess;
+    U64 captureHistoryAttempts;
+    U64 firstMoveSuccess;
+    U64 totalNodes;
+};
+
+
+// ============================================================================
 // Move Picker
 //
 // Generates and orders moves lazily, returning them one at a time
@@ -336,20 +495,20 @@ inline MovePickStage& operator++(MovePickStage& s) {
 
 class MovePicker {
 public:
-    // Constructor for main search (with continuation history)
+    // Constructor for main search (with continuation history and capture history)
     MovePicker(const Board& b, const Move* ttMoves, int ttMoveCount, int ply,
                const KillerTable& kt, const CounterMoveTable& cm,
                const HistoryTable& ht, Move prevMove,
                const ContinuationHistoryEntry* contHist1 = nullptr,
                const ContinuationHistoryEntry* contHist2 = nullptr,
-               const int (*captureHistory)[64][8] = nullptr);
+               const CaptureHistory* captHist = nullptr);
 
     // Constructor for quiescence search (basic - no capture history)
     MovePicker(const Board& b, const Move* ttMoves, int ttMoveCount, const HistoryTable& ht);
 
     // Constructor for quiescence search (advanced - with capture history)
     MovePicker(const Board& b, const Move* ttMoves, int ttMoveCount, const HistoryTable& ht,
-               const int (*captureHistory)[64][8]);
+               const CaptureHistory* captHist);
 
     // Get next move (returns MOVE_NONE when exhausted)
     Move next_move();
@@ -361,7 +520,7 @@ private:
     const CounterMoveTable* counterMoves;
     const ContinuationHistoryEntry* contHist1ply;  // 1-ply ago continuation history
     const ContinuationHistoryEntry* contHist2ply;  // 2-ply ago continuation history
-    const int (*captureHistory)[64][8];            // Capture history pointer
+    const CaptureHistory* captureHist;             // Capture history class pointer
 
     Move ttMoves[3];
     int ttMoveCount;

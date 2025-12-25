@@ -158,10 +158,10 @@ MovePicker::MovePicker(const Board& b, const Move* tm, int count, int p,
                        const HistoryTable& ht, Move prevMove,
                        const ContinuationHistoryEntry* contHist1,
                        const ContinuationHistoryEntry* contHist2,
-                       const int (*ch)[64][8])
+                       const CaptureHistory* ch)
     : board(b), history(ht), killers(&kt), counterMoves(&cm),
       contHist1ply(contHist1), contHist2ply(contHist2),
-      captureHistory(ch),
+      captureHist(ch),
       ttMoveCount(count), ttMoveIdx(0), currentIdx(0), ply(p), stage(STAGE_TT_MOVE) {
 
     for (int i = 0; i < 3; ++i) {
@@ -181,7 +181,7 @@ MovePicker::MovePicker(const Board& b, const Move* tm, int count, int p,
 
 MovePicker::MovePicker(const Board& b, const Move* tm, int count, const HistoryTable& ht)
     : board(b), history(ht), killers(nullptr), counterMoves(nullptr),
-      contHist1ply(nullptr), contHist2ply(nullptr), captureHistory(nullptr),
+      contHist1ply(nullptr), contHist2ply(nullptr), captureHist(nullptr),
       ttMoveCount(count), ttMoveIdx(0), killer1(MOVE_NONE), killer2(MOVE_NONE),
       counterMove(MOVE_NONE), currentIdx(0), ply(0),
       stage(STAGE_QS_TT_MOVE) {
@@ -193,9 +193,9 @@ MovePicker::MovePicker(const Board& b, const Move* tm, int count, const HistoryT
 
 // QSearch constructor with capture history for improved ordering
 MovePicker::MovePicker(const Board& b, const Move* tm, int count, const HistoryTable& ht,
-                       const int (*ch)[64][8])
+                       const CaptureHistory* ch)
     : board(b), history(ht), killers(nullptr), counterMoves(nullptr),
-      contHist1ply(nullptr), contHist2ply(nullptr), captureHistory(ch),
+      contHist1ply(nullptr), contHist2ply(nullptr), captureHist(ch),
       ttMoveCount(count), ttMoveIdx(0), killer1(MOVE_NONE), killer2(MOVE_NONE),
       counterMove(MOVE_NONE), currentIdx(0), ply(0),
       stage(STAGE_QS_TT_MOVE) {
@@ -248,14 +248,14 @@ void MovePicker::score_captures() {
             // Good capture: MVV-LVA + SEE bonus + Capture History
             sm.score = SCORE_WINNING_CAP + mvv_lva(board, m);
 
-            // Add Capture History bonus
-            if (captureHistory) {
+            // Add Capture History bonus (using CaptureHistory class)
+            if (captureHist) {
                 Piece pc = board.piece_on(m.from());
                 Piece captured = board.piece_on(m.to());
                 if (captured != NO_PIECE) {
                     PieceType capturedPt = type_of(captured);
-                    // Divide by integer to keep scale reasonable
-                    sm.score += captureHistory[pc][m.to()][capturedPt] / 100;
+                    // Use CaptureHistory::get() method, divide by 100 to keep scale reasonable
+                    sm.score += captureHist->get(pc, m.to(), capturedPt) / 100;
                 }
             }
         } else {

@@ -4,6 +4,7 @@
 #include "book.hpp"
 #include "tablebase.hpp"
 #include "uci.hpp"
+#include "moveorder.hpp"
 #include "search_constants.hpp"
 #include <iostream>
 #include <algorithm>
@@ -43,6 +44,32 @@ void init_lmr_table() {
 
 using namespace SearchParams;
 
+// Contempt Factor
+int get_contempt(const Board& board) {
+    int contempt = UCI::options.contempt;
+
+    if (UCI::options.dynamicContempt) {
+        // Dynamic contempt: adjust based on material balance
+        // When we have more material, we want to avoid draws more (higher contempt)
+        // When we have less material, we might accept draws (lower contempt)
+        int materialBalance = Eval::material_balance(board);
+        Color us = board.side_to_move();
+
+        // If it's our turn and we're ahead, increase contempt (avoid draws)
+        // If we're behind, decrease contempt (accept draws more)
+        if (us == WHITE) {
+            contempt += materialBalance / 20;  // Scale: every 200cp = +10 contempt
+        } else {
+            contempt -= materialBalance / 20;
+        }
+
+        // Clamp to reasonable range
+        contempt = std::clamp(contempt, -100, 100);
+    }
+
+    return contempt;
+}
+
 // ============================================================================
 // Search Constructor
 // ============================================================================
@@ -78,15 +105,8 @@ void Search::clear_history() {
     history.clear();
     contHistory.clear();
     corrHistory.clear();  // Clear correction history between games
-
-    // Clear capture history
-    for (int i = 0; i < 16; ++i) {
-        for (int j = 0; j < 64; ++j) {
-            for (int k = 0; k < 8; ++k) {
-                captureHistory[i][j][k] = 0;
-            }
-        }
-    }
+    captureHist.clear();  // Clear capture history using CaptureHistory class
+    moveOrderStats.reset();  // Reset move ordering statistics
 }
 
 // ============================================================================
@@ -146,6 +166,13 @@ void Search::init_time_management(Color us) {
     // Safety buffer for communication lag
     int moveOverhead = 50;
 
+    // Initialize advanced time management variables
+    bestMoveStability = 0;
+    failLowCount = 0;
+    lastFailLowScore = VALUE_NONE;
+    emergencyMode = false;
+    positionComplexity = 50;  // Default medium complexity
+
     if (limits.movetime > 0) {
         optimumTime = std::max(1, limits.movetime - moveOverhead);
         maximumTime = std::max(1, limits.movetime - moveOverhead);
@@ -165,6 +192,35 @@ void Search::init_time_management(Color us) {
     // Reserve time for safety
     int safeTime = std::max(1, time_left - moveOverhead);
 
+    // Emergency Time Mode (ultra-low time handling)
+    if (time_left < 500) {
+        // CRITICAL: Less than 0.5 second - use absolute minimum
+        emergencyMode = true;
+        optimumTime = std::max(5, time_left / 20);   // 5% of remaining
+        maximumTime = std::max(10, time_left / 10);  // 10% of remaining
+        return;
+    } else if (time_left < 2000) {
+        // LOW TIME: Less than 2 seconds - be very conservative
+        emergencyMode = true;
+        optimumTime = std::max(20, time_left / 15 + inc / 2);
+        maximumTime = std::max(50, time_left / 8 + inc / 2);
+        return;
+    } else if (time_left < 5000) {
+        // WARNING: Less than 5 seconds - moderately conservative
+        emergencyMode = false;
+        optimumTime = time_left / 12 + inc * 2 / 3;
+        maximumTime = time_left / 6 + inc;
+
+        optimumTime = std::min(optimumTime, safeTime - 100);
+        maximumTime = std::min(maximumTime, safeTime - 50);
+
+        optimumTime = std::max(optimumTime, 30);
+        maximumTime = std::max(maximumTime, 60);
+        return;
+    }
+
+    // Normal Time Allocation (>= 5 seconds remaining)
+
     // Base allocation: time_left / moves + increment bonus
     optimumTime = safeTime / moves_to_go + inc * 3 / 4;
 
@@ -172,20 +228,12 @@ void Search::init_time_management(Color us) {
     maximumTime = std::min(safeTime / 3, optimumTime * 5);
 
     // Ensure we don't exceed safe time
-    optimumTime = std::min(optimumTime, safeTime - 10);
-    maximumTime = std::min(maximumTime, safeTime - 10);
+    optimumTime = std::min(optimumTime, safeTime - 100);
+    maximumTime = std::min(maximumTime, safeTime - 50);
 
     // Minimum time bounds
-    optimumTime = std::max(optimumTime, 10);
-    maximumTime = std::max(maximumTime, 20);
-
-    // Panic mode: if time is critically low (< 1 second), use minimal time
-    if (time_left < 1000) {
-        optimumTime = std::min(optimumTime, time_left / 10);
-        maximumTime = std::min(maximumTime, time_left / 5);
-        optimumTime = std::max(optimumTime, 5);
-        maximumTime = std::max(maximumTime, 10);
-    }
+    optimumTime = std::max(optimumTime, 50);
+    maximumTime = std::max(maximumTime, 100);
 }
 
 void Search::check_time() {
@@ -403,45 +451,139 @@ void Search::iterative_deepening(Board& board) {
             // Copy best PV to pvLines[0] for compatibility
             pvLines[0] = bestRM.pv;
 
-            // Panic Logic: Monitor score fluctuation and best move stability
-            if (!limits.infinite && limits.movetime == 0) {
+            // =========================================================================
+            // ADVANCED TIME MANAGEMENT
+            // =========================================================================
+            if (!limits.infinite && limits.movetime == 0 && !emergencyMode) {
                 int score = bestRM.score;
 
-                if (rootDepth >= 6) {
-                    bool unstable = false;
-
-                    // 1. Score fluctuation
-                    if (previousRootScore != VALUE_NONE) {
-                        int fluctuation = std::abs(score - previousRootScore);
-                        if (fluctuation > 50) {
-                            unstable = true;
+                if (rootDepth >= 4) {
+                    // Bestmove Stability Factor
+                    // Track how many consecutive iterations the best move has been stable
+                    // More stable = use less time, less stable = use more time
+                    if (previousRootBestMove != MOVE_NONE) {
+                        if (rootBestMove == previousRootBestMove) {
+                            bestMoveStability = std::min(bestMoveStability + 1, 10);
+                        } else {
+                            bestMoveStability = 0;  // Reset on move change
                         }
                     }
 
-                    // 2. Best move instability
-                    if (previousRootBestMove != MOVE_NONE && rootBestMove != previousRootBestMove) {
-                        unstable = true;
+                    // Fail-Low Time Extension
+                    // When score is dropping (failing low), we need more time
+                    bool failingLow = false;
+                    if (previousRootScore != VALUE_NONE) {
+                        int scoreDrop = previousRootScore - score;
+
+                        if (scoreDrop > 30) {  // Score dropped by 30+ centipawns
+                            failLowCount++;
+                            failingLow = true;
+                            lastFailLowScore = score;
+
+                            // Extend time proportionally to the drop
+                            int extension = std::min(scoreDrop * 2, optimumTime / 2);
+                            optimumTime = std::min(maximumTime, optimumTime + extension);
+                        } else if (scoreDrop < -20) {
+                            // Score improved significantly - reset fail-low
+                            failLowCount = 0;
+                        }
+
+                        // Consecutive fail-lows need even more time
+                        if (failLowCount >= 2) {
+                            int panicExtension = optimumTime / 3;
+                            optimumTime = std::min(maximumTime, optimumTime + panicExtension);
+                        }
                     }
 
-                    // If unstable, extend time (Panic Mode)
-                    if (unstable) {
-                        // Increase soft limit
-                        optimumTime = std::min(maximumTime, optimumTime + optimumTime / 2);
+                    // Complexity-Based Time Allocation
+                    // Estimate position complexity and adjust time accordingly
+                    {
+                        int complexity = 50;  // Base complexity
+
+                        // Factor 1: Number of root moves (more options = more complex)
+                        int numMoves = static_cast<int>(rootMoves.size());
+                        if (numMoves > 35) complexity += 15;
+                        else if (numMoves > 25) complexity += 10;
+                        else if (numMoves < 10) complexity -= 15;
+                        else if (numMoves < 15) complexity -= 10;
+
+                        // Factor 2: Score variance in top moves (similar scores = harder choice)
+                        if (rootMoves.size() >= 3) {
+                            int topScore = rootMoves[0].score;
+                            int thirdScore = rootMoves[2].score;
+                            int spread = topScore - thirdScore;
+
+                            if (spread < 20) complexity += 20;       // Very close scores
+                            else if (spread < 50) complexity += 10;  // Moderately close
+                            else if (spread > 200) complexity -= 15; // Clear best move
+                        }
+
+                        // Factor 3: Absolute score (winning/losing positions might be simpler)
+                        if (std::abs(score) > 300) complexity -= 10;
+                        if (std::abs(score) > 600) complexity -= 10;
+
+                        // Factor 4: Best move stability contributes to simplicity
+                        complexity -= bestMoveStability * 3;
+
+                        // Clamp complexity
+                        positionComplexity = std::clamp(complexity, 10, 100);
+
+                        // Adjust optimum time based on complexity
+                        // complexity 50 = normal, <50 = use less time, >50 = use more time
+                        double complexityFactor = 0.5 + (positionComplexity / 100.0);
+                        int adjustedOptimum = static_cast<int>(optimumTime * complexityFactor);
+                        optimumTime = std::min(maximumTime, adjustedOptimum);
+                    }
+
+                    // Stability-based Early Termination
+                    // If best move has been stable for many iterations, stop early
+                    auto now = std::chrono::steady_clock::now();
+                    int elapsed = static_cast<int>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count()
+                    );
+
+                    // Calculate stability bonus (reduces required time)
+                    double stabilityFactor = 1.0 - (bestMoveStability * 0.08);  // Up to 80% reduction
+                    stabilityFactor = std::max(stabilityFactor, 0.3);  // Never less than 30%
+
+                    int effectiveOptimum = static_cast<int>(optimumTime * stabilityFactor);
+
+                    // Early stop conditions
+                    if (multiPV == 1) {
+                        // Very stable best move with enough depth - can stop early
+                        if (bestMoveStability >= 5 && elapsed > effectiveOptimum * 0.4) {
+                            break;
+                        }
+
+                        // Normal stability check
+                        if (!failingLow && elapsed > effectiveOptimum * 0.6) {
+                            break;
+                        }
+
+                        // Failing low but past soft limit
+                        if (failingLow && elapsed > optimumTime * 0.9) {
+                            break;
+                        }
                     }
                 }
 
                 previousRootScore = score;
                 previousRootBestMove = rootBestMove;
-
+            }
+            // Emergency mode: use minimal time, check more frequently
+            else if (emergencyMode) {
                 auto now = std::chrono::steady_clock::now();
                 int elapsed = static_cast<int>(
                     std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count()
                 );
 
-                // Only break early if not in MultiPV analysis mode
-                if (multiPV == 1 && elapsed > optimumTime * 0.6) {
+                // In emergency mode, stop as soon as we have a reasonable move
+                if (rootDepth >= 4 && elapsed > optimumTime) {
                     break;
                 }
+
+                previousRootScore = bestRM.score;
+                previousRootBestMove = rootBestMove;
             }
         }
     }
@@ -477,9 +619,6 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
 
     if (stopped) return 0;
 
-    // Initialize PV line for this ply BEFORE anything else
-    // This MUST happen before depth check, otherwise when we go to qsearch,
-    // the parent will use stale PV data, causing illegal moves in PV
     pvLines[ply].clear();
 
     // Get stack pointer for current ply
@@ -487,9 +626,9 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     SearchStack* ss = &stack[ply + 2];
 
     // Quiescence search at depth 0
-    // [PERBAIKAN] Start qsearch with depth 2 to search quiet checks at first plies
+    // [PERBAIKAN] Start qsearch with depth 4 for deeper tactical analysis
     if (depth <= 0) {
-        return qsearch(board, alpha, beta, 2);
+        return qsearch(board, alpha, beta, 4);
     }
 
     ++searchStats.nodes;
@@ -497,7 +636,13 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     // Draw detection: check for repetition, 50-move rule, insufficient material
     // Skip at root node (ply 0) to ensure we return a move
     if (ply > 0 && board.is_draw(ply)) {
-        return 0;  // Draw score
+        // Apply contempt factor to draws
+        // Positive contempt = we dislike draws (return slightly negative)
+        // Negative contempt = we like draws (return slightly positive)
+        int contempt = get_contempt(board);
+        // Negate for side to move: if we're winning with positive contempt,
+        // a draw should score worse (negative from our perspective)
+        return -contempt;
     }
 
     // Mate distance pruning
@@ -815,7 +960,7 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                                                     stack[ply].contHistory : nullptr;
 
     MovePicker mp(board, ttMoves, ttMoveCount, ply, killers, counterMoves, history, previousMove,
-                  contHist1ply, contHist2ply, captureHistory);
+                  contHist1ply, contHist2ply, &captureHist);
 
     size_t rootMoveIdx = 0;
     Move m;
@@ -861,6 +1006,48 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         // Enhanced Threat Detection
         bool createsThreat = false;
         bool createsFork = false;
+        bool escapesAttack = false;  // [NEW] True if this move saves a piece from attack
+
+        // [NEW] Check if the piece we're moving is under attack (escaping danger)
+        // This is CRITICAL to avoid losing valuable pieces like the queen
+        {
+            Bitboard attackersToFrom = board.attackers_to(m.from(), board.pieces()) & board.pieces(~us);
+            if (attackersToFrom) {
+                // Our piece is being attacked - check if it's valuable enough to prioritize escape
+                int pieceValueMoving = PieceValue[movedPt];
+
+                // Find the least valuable attacker
+                int minAttackerValue = 20000;  // Start high (king value)
+                for (Bitboard atk = attackersToFrom; atk; ) {
+                    Square atkSq = pop_lsb(atk);
+                    PieceType atkPt = type_of(board.piece_on(atkSq));
+                    minAttackerValue = std::min(minAttackerValue, PieceValue[atkPt]);
+                }
+
+                // If our piece is worth more than the attacker, this is a dangerous position
+                // Mark as escaping attack if we're moving a valuable piece that's under threat
+                if (pieceValueMoving >= minAttackerValue || movedPt == QUEEN || movedPt == ROOK) {
+                    // Check if destination is safe (not attacked or defended)
+                    Bitboard newOcc = board.pieces() ^ square_bb(m.from()) | square_bb(m.to());
+                    Bitboard attackersToTo = board.attackers_to(m.to(), newOcc) & board.pieces(~us);
+
+                    // If destination is safer (fewer/weaker attackers), this is an escape move
+                    if (!attackersToTo || popcount(attackersToTo) < popcount(attackersToFrom)) {
+                        escapesAttack = true;
+                    }
+                    // Also consider if the piece is defended at the destination
+                    Bitboard defendersAtTo = board.attackers_to(m.to(), newOcc) & board.pieces(us);
+                    if (defendersAtTo && pieceValueMoving <= 500) {  // Minor pieces and pawns
+                        escapesAttack = true;
+                    }
+                }
+
+                // [CRITICAL] Queen under attack should ALWAYS prioritize escape
+                if (movedPt == QUEEN) {
+                    escapesAttack = true;
+                }
+            }
+        }
 
         if (!isCapture && !givesCheck) {
             // Calculate attacks from the destination square
@@ -900,34 +1087,24 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             }
         }
 
-        // Pre-move pruning (before making the move)
-
-        // Late Move Pruning (LMP)
         // Skip late quiet moves at low depths when we're not improving
-        // [PERBAIKAN] Skip LMP for moves that give check or create threats
+        // [PERBAIKAN] Skip LMP for moves that give check, create threats, OR escape attacks
         if (!pvNode && !inCheck && depth <= 7 && !isCapture && !isPromotion &&
-            !givesCheck && !createsThreat && bestScore > VALUE_MATED_IN_MAX_PLY) {
+            !givesCheck && !createsThreat && !escapesAttack && bestScore > VALUE_MATED_IN_MAX_PLY) {
             if (moveCount > LMPThreshold[depth]) {
                 continue;
             }
         }
 
-        // Futility Pruning
-        // Skip quiet moves that can't raise alpha even with optimistic margin
-        // Use corrected eval for more accurate pruning
+        // [PERBAIKAN] Don't prune moves that escape attacks on valuable pieces
         if (!pvNode && !inCheck && depth <= 6 && depth >= 1 && !isCapture && !isPromotion &&
-            bestScore > VALUE_MATED_IN_MAX_PLY && !givesCheck && !createsThreat) {
+            bestScore > VALUE_MATED_IN_MAX_PLY && !givesCheck && !createsThreat && !escapesAttack) {
             int futilityMargin = FutilityMargin[depth];
             if (correctedStaticEval + futilityMargin <= alpha) {
                 // Skip this move - it won't raise alpha
                 continue;
             }
         }
-
-        // SEE Pruning with Dynamic Thresholds
-        // Thresholds vary based on improving status:
-        // - When improving: be more lenient (less pruning)
-        // - When not improving: be stricter (more pruning)
 
         // SEE pruning for captures
         // Skip losing captures at low depths
@@ -941,8 +1118,8 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         }
 
         // SEE pruning for quiet moves (prune if quiet move has very negative SEE)
-        // Skip SEE pruning for checking/threatening moves
-        if (!pvNode && !inCheck && depth <= 3 && !isCapture && !givesCheck && !createsThreat) {
+        // Skip SEE pruning for checking/threatening moves OR moves that escape attacks
+        if (!pvNode && !inCheck && depth <= 3 && !isCapture && !givesCheck && !createsThreat && !escapesAttack) {
             int seeThreshold = improving ?
                 -SEE_QUIET_IMPROVING_FACTOR * depth :
                 -SEE_QUIET_NOT_IMPROVING_FACTOR * depth;
@@ -952,8 +1129,9 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         }
 
         // History Leaf Pruning
+        // [PERBAIKAN] Don't prune escape moves based on history alone
         if (!pvNode && !inCheck && depth <= HISTORY_LEAF_PRUNING_DEPTH &&
-            !isCapture && !isPromotion && !givesCheck && !createsThreat &&
+            !isCapture && !isPromotion && !givesCheck && !createsThreat && !escapesAttack &&
             bestScore > VALUE_MATED_IN_MAX_PLY) {
             int histScore = history.get(board.side_to_move(), m);
             if (histScore < -HISTORY_LEAF_PRUNING_MARGIN * depth) {
@@ -1124,18 +1302,24 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             // History-based adjustment (more granular)
             int histScore = history.get(board.side_to_move(), m);
 
-            // Add continuation history scores for better accuracy
+            // Add continuation history scores with configurable weights
+            // Uses weights from search_constants.hpp for better tuning
             PieceType pt = type_of(movedPiece);
             if (contHist1ply) {
-                histScore += contHist1ply->get(pt, m.to());
+                histScore += CONT_HIST_1PLY_WEIGHT * contHist1ply->get(pt, m.to());
             }
             if (contHist2ply) {
-                // Weight 2-ply continuation history by configurable factor
-                histScore += contHist2ply->get(pt, m.to()) / COUNTER_MOVE_HISTORY_BONUS;
+                histScore += CONT_HIST_2PLY_WEIGHT * contHist2ply->get(pt, m.to());
+            }
+            // 4-ply continuation history (great-grandparent's move context)
+            // This is accessed via stack[ply-2].contHistory if available
+            if (ply >= 4 && stack[ply - 2].contHistory) {
+                const ContinuationHistoryEntry* contHist4ply = stack[ply - 2].contHistory;
+                histScore += CONT_HIST_4PLY_WEIGHT * contHist4ply->get(pt, m.to());
             }
 
-            // Scale history adjustment: [-3, +3] range
-            reduction -= std::clamp(histScore / 4000, -3, 3);
+            // Scale history adjustment using configurable divisor and max
+            reduction -= std::clamp(histScore / HISTORY_LMR_DIVISOR, -HISTORY_LMR_MAX_ADJ, HISTORY_LMR_MAX_ADJ);
 
             // Clamp reduction
             // Don't reduce below 1 or into negative/qsearch
@@ -1150,6 +1334,10 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
 
         StateInfo si;
         board.do_move(m, si);
+
+        // Prefetch TT entry for the position after this move
+        // This prefetch hides memory latency during the recursive search
+        TT.prefetch(board.key());
 
         // Root Node Subtree Size Counting
         U64 nodesBefore = 0;
@@ -1277,16 +1465,12 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                             }
                         }
                     } else {
-                        // Update capture history
+                        // Update capture history using CaptureHistory class
                         Piece captured = board.piece_on(m.to());
                         if (captured != NO_PIECE) {
                              PieceType capturedPt = type_of(captured);
-                             int bonus = depth * depth;
-                             captureHistory[movedPiece][m.to()][capturedPt] += bonus;
-                             // We should probably clamp or decay, but simple addition is a start.
-                             // To fit with other history, maybe limit it.
-                             if (captureHistory[movedPiece][m.to()][capturedPt] > 20000)
-                                 captureHistory[movedPiece][m.to()][capturedPt] = 20000;
+                             // Use update_capture_stats with gravity decay
+                             captureHist.update_capture_stats(movedPiece, m.to(), capturedPt, depth, true);
                         }
                     }
 
@@ -1417,7 +1601,7 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
     }
 
     // Use MovePicker with capture history for better ordering in qsearch
-    MovePicker mp(board, ttMoves, ttMoveCount, history, captureHistory);
+    MovePicker mp(board, ttMoves, ttMoveCount, history, &captureHist);
     Move m;
     int bestScore = inCheck ? -VALUE_INFINITE : staticEval;
 
@@ -1434,14 +1618,15 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
 
         // Delta pruning (hanya untuk captures saat TIDAK dalam skak)
         // Skip pruning for major piece captures to avoid missing sacrifices
+        // [PERBAIKAN] Increased margin from 250 to 400 for better tactical accuracy
         if (!inCheck && !m.is_promotion()) {
             PieceType capturedPt = type_of(board.piece_on(m.to()));
             int captureValue = PieceValue[capturedPt];
 
-            // Use larger margin (250) to be more conservative
+            // Use larger margin (400) to be more conservative about pruning
             // Don't prune if capturing queen or rook (could be important sacrifice)
             if (capturedPt != QUEEN && capturedPt != ROOK) {
-                if (staticEval + captureValue + 250 < alpha) {
+                if (staticEval + captureValue + 400 < alpha) {
                     continue;  // Can't raise alpha
                 }
             }

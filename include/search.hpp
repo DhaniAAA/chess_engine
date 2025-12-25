@@ -290,7 +290,8 @@ private:
     HistoryTable history;
     ContinuationHistory contHistory;  // Continuation history (1-ply and 2-ply ago tracking)
     CorrectionHistory corrHistory;    // Correction history for static eval bias correction
-    int captureHistory[16][64][8];    // Capture history [Piece][To][CapturedPieceType]
+    CaptureHistory captureHist;       // Capture history [Piece][To][CapturedPieceType]
+    MoveOrderStats moveOrderStats;    // Move ordering statistics tracking
 
     // Search state
     std::atomic<bool> stopped;
@@ -314,6 +315,13 @@ private:
     std::chrono::steady_clock::time_point startTime;
     int optimumTime;  // Soft time limit
     int maximumTime;  // Hard time limit
+
+    // Advanced Time Management
+    int bestMoveStability;    // Consecutive iterations with same best move
+    int failLowCount;         // Consecutive fail-low iterations (score dropping)
+    int lastFailLowScore;     // Score at last fail-low
+    bool emergencyMode;       // Ultra-low time mode (< 500ms remaining)
+    int positionComplexity;   // Estimated position complexity (0-100)
 
     // Search stack and PV storage
     SearchStack stack[MAX_PLY + 4];
