@@ -24,7 +24,7 @@ TimeManager timeMgr;
 
 const std::string ENGINE_NAME = "GC-Engine";
 const std::string ENGINE_AUTHOR = "Dhani";
-const std::string ENGINE_VERSION = "1.0";
+const std::string ENGINE_VERSION = "1.2";
 
 // ============================================================================
 // UCI Handler Implementation
@@ -107,6 +107,10 @@ void UCIHandler::cmd_uci() {
     std::cout << "option name OwnBook type check default true" << std::endl;
     std::cout << "option name Book File type string default book.bin" << std::endl;
     std::cout << "option name SyzygyPath type string default <empty>" << std::endl;
+
+    // Contempt and Pondering Options
+    std::cout << "option name Contempt type spin default 20 min -100 max 100" << std::endl;
+    std::cout << "option name Dynamic Contempt type check default true" << std::endl;
 
     // Tuning Options (SPSA)
     std::cout << "option name PawnValueMG type spin default " << Tuning::PawnValue.mg << " min 0 max 2000" << std::endl;
@@ -417,6 +421,9 @@ void UCIHandler::cmd_setoption(std::istringstream& is) {
     else if (name == "RookOpenFileBonusMG") Tuning::RookOpenFileBonus.mg = std::stoi(value);
     else if (name == "RookOpenFileBonusEG") Tuning::RookOpenFileBonus.eg = std::stoi(value);
     else if (name == "KingSafetyWeight") Tuning::KingSafetyWeight = std::stoi(value);
+    // Contempt Options
+    else if (name == "Contempt") options.contempt = std::stoi(value);
+    else if (name == "Dynamic Contempt") options.dynamicContempt = (value == "true");
 }
 
 void UCIHandler::cmd_perft(std::istringstream& is) {

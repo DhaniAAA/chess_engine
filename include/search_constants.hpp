@@ -18,17 +18,18 @@ constexpr int SCORE_FLUCTUATION_THRESHOLD = 50;  // Centipawns change to trigger
 // ============================================================================
 
 // Futility pruning margins per depth
-constexpr int FutilityMargin[7] = { 0, 150, 300, 450, 600, 750, 900 };
+// [PERBAIKAN] Increased margins for less aggressive pruning
+constexpr int FutilityMargin[7] = { 0, 200, 400, 600, 800, 1000, 1200 };
 
 // Razoring margins per depth
 constexpr int RazorMargin[4] = { 0, 300, 500, 700 };
 
 // Reverse futility pruning (static null move) margins
-constexpr int RFPMargin[7] = { 0, 80, 160, 240, 320, 400, 480 };
+constexpr int RFPMargin[7] = { 0, 100, 200, 300, 400, 500, 600 };
 
 // Late move pruning thresholds (skip quiet moves after this many tries at low depth)
-// More generous thresholds to avoid missing tactics
-constexpr int LMPThreshold[8] = { 0, 5, 8, 13, 19, 26, 34, 43 };
+// [PERBAIKAN] More generous thresholds to search more moves before pruning
+constexpr int LMPThreshold[8] = { 0, 6, 10, 16, 24, 34, 46, 60 };
 
 // Maximum depth for specific pruning techniques
 constexpr int FUTILITY_MAX_DEPTH = 6;
@@ -136,6 +137,18 @@ constexpr int SEE_QUIET_NOT_IMPROVING_FACTOR = 70;   // Quiet SEE when not impro
 // ============================================================================
 
 constexpr int COUNTER_MOVE_HISTORY_BONUS = 2; // Weight for countermove history in LMR
+
+// ============================================================================
+// Continuation History Weighting
+// These parameters control how much weight is given to different history types
+// when scoring moves for move ordering and LMR adjustments
+// ============================================================================
+
+constexpr int CONT_HIST_1PLY_WEIGHT = 2;     // Weight for 1-ply continuation history (most relevant)
+constexpr int CONT_HIST_2PLY_WEIGHT = 1;     // Weight for 2-ply continuation history
+constexpr int CONT_HIST_4PLY_WEIGHT = 1;     // Weight for 4-ply continuation history (less relevant)
+constexpr int HISTORY_LMR_DIVISOR = 4000;    // Divisor for history-based LMR adjustment
+constexpr int HISTORY_LMR_MAX_ADJ = 3;       // Maximum LMR adjustment from history
 
 } // namespace SearchParams
 

@@ -39,6 +39,15 @@ struct EngineOptions {
     std::string bookPath = "";  // Opening book path
     std::string syzygyPath = ""; // Syzygy tablebase path
     int moveOverhead = 10;      // Time overhead per move (ms)
+
+    // Contempt Factor
+    int contempt = 20;          // Contempt value in centipawns (positive = avoid draws)
+    bool dynamicContempt = true; // Adjust contempt based on position
+
+    // Ponder Statistics (for tracking hit rate)
+    U64 ponderHits = 0;         // Times opponent played predicted move
+    U64 ponderAttempts = 0;     // Total ponder attempts
+    Move lastPonderMove = MOVE_NONE; // Last ponder move (to verify hit)
 };
 
 // Global options

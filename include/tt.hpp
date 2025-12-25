@@ -100,6 +100,15 @@ public:
         #endif
     }
 
+    // Prefetch TT entry into L2 cache (for positions 2 moves ahead)
+    void prefetch2(Key key) {
+        #if defined(_MM_HINT_T1)
+        _mm_prefetch((const char*)first_entry(key), _MM_HINT_T1);
+        #elif defined(__GNUC__)
+        __builtin_prefetch(first_entry(key), 0, 2);  // Read access, low temporal locality
+        #endif
+    }
+
     // Increment the generation (call at start of each search)
     void new_search() { generation8 += 4; }  // Shift by 4 to keep bound bits clear
 
