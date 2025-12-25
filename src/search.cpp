@@ -124,7 +124,6 @@ void Search::start(Board& board, const SearchLimits& lim) {
     init_time_management(board.side_to_move());
     startTime = std::chrono::steady_clock::now();
 
-    // Try opening book first (if not in analysis mode)
     if (!limits.infinite && Book::book.is_loaded()) {
         Move bookMove = Book::book.probe(board);
         if (bookMove != MOVE_NONE) {
@@ -138,7 +137,6 @@ void Search::start(Board& board, const SearchLimits& lim) {
         }
     }
 
-    // Try tablebase at root (if available and position is endgame)
     if (Tablebase::TB.is_initialized() && Tablebase::TB.can_probe(board)) {
         Move tbMove = Tablebase::TB.probe_root(board);
         if (tbMove != MOVE_NONE) {
@@ -163,10 +161,8 @@ void Search::start(Board& board, const SearchLimits& lim) {
 // ============================================================================
 
 void Search::init_time_management(Color us) {
-    // Safety buffer for communication lag
     int moveOverhead = 50;
 
-    // Initialize advanced time management variables
     bestMoveStability = 0;
     failLowCount = 0;
     lastFailLowScore = VALUE_NONE;
@@ -189,24 +185,20 @@ void Search::init_time_management(Color us) {
     int inc = limits.inc[us];
     int moves_to_go = limits.movestogo > 0 ? limits.movestogo : 30;
 
-    // Reserve time for safety
     int safeTime = std::max(1, time_left - moveOverhead);
 
-    // Emergency Time Mode (ultra-low time handling)
     if (time_left < 500) {
-        // CRITICAL: Less than 0.5 second - use absolute minimum
+
         emergencyMode = true;
         optimumTime = std::max(5, time_left / 20);   // 5% of remaining
         maximumTime = std::max(10, time_left / 10);  // 10% of remaining
         return;
     } else if (time_left < 2000) {
-        // LOW TIME: Less than 2 seconds - be very conservative
         emergencyMode = true;
         optimumTime = std::max(20, time_left / 15 + inc / 2);
         maximumTime = std::max(50, time_left / 8 + inc / 2);
         return;
     } else if (time_left < 5000) {
-        // WARNING: Less than 5 seconds - moderately conservative
         emergencyMode = false;
         optimumTime = time_left / 12 + inc * 2 / 3;
         maximumTime = time_left / 6 + inc;
@@ -219,15 +211,9 @@ void Search::init_time_management(Color us) {
         return;
     }
 
-    // Normal Time Allocation (>= 5 seconds remaining)
-
-    // Base allocation: time_left / moves + increment bonus
     optimumTime = safeTime / moves_to_go + inc * 3 / 4;
-
-    // Maximum time: up to 5x optimal, but never more than 1/3 of remaining time
     maximumTime = std::min(safeTime / 3, optimumTime * 5);
 
-    // Ensure we don't exceed safe time
     optimumTime = std::min(optimumTime, safeTime - 100);
     maximumTime = std::min(maximumTime, safeTime - 50);
 
@@ -239,7 +225,6 @@ void Search::init_time_management(Color us) {
 void Search::check_time() {
     if (stopped) return;
 
-    // Skip time checking for infinite/ponder mode
     if (limits.infinite || limits.ponder) return;
 
     auto now = std::chrono::steady_clock::now();
@@ -247,13 +232,11 @@ void Search::check_time() {
         std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count()
     );
 
-    // Hard Limit (Absolute Max): Must stop
     if (elapsed >= maximumTime) {
         stopped = true;
         return;
     }
 
-    // Soft Limit (Optimal Time): Stop only if position is stable
     if (elapsed >= optimumTime) {
         bool unstable = false;
 
@@ -273,8 +256,6 @@ void Search::check_time() {
             }
         }
 
-        // If stable, stop at soft limit.
-        // If unstable, extend (continue up to maximumTime).
         if (!unstable) {
             stopped = true;
         }
@@ -300,7 +281,6 @@ void Search::iterative_deepening(Board& board) {
     rootPly = board.game_ply();  // Store starting ply for relative ply calculation
     pvIdx = 0;
 
-    // Initialize root moves from legal move list
     rootMoves.clear();
     MoveList legalMoves;
     MoveGen::generate_legal(board, legalMoves);
@@ -356,16 +336,12 @@ void Search::iterative_deepening(Board& board) {
                 beta = std::min(score + delta, VALUE_INFINITE);
             }
 
-            // For subsequent PVs, use previous PV's score as upper bound
-            // This ensures we only find moves worse than already searched PVs
             if (pvIdx > 0) {
-                // Search below the previous PV's score
                 int prevScore = rootMoves[pvIdx - 1].score;
                 beta = std::min(beta, prevScore + 1);
                 alpha = std::min(alpha, prevScore - delta);
             }
 
-            // Aspiration window loop
             int failedHighLow = 0;
 
             while (true) {
@@ -373,8 +349,6 @@ void Search::iterative_deepening(Board& board) {
 
                 if (stopped) break;
 
-                // Sort partial results to get the best move to the front of current PV range
-                // Only sort from pvIdx onwards to keep already-searched PVs in place
                 std::stable_sort(rootMoves.begin() + pvIdx, rootMoves.end());
 
                 if (score <= alpha) {
@@ -430,9 +404,7 @@ void Search::iterative_deepening(Board& board) {
                 rootBestMove = bestRM.move;
             }
 
-            // Get ponder move (2nd move in best PV)
-            // IMPORTANT: Ponder move must be validated in the position AFTER bestMove is played
-            rootPonderMove = MOVE_NONE;  // Default to no ponder
+            rootPonderMove = MOVE_NONE;
             if (bestRM.pv.length > 1 && rootBestMove != MOVE_NONE) {
                 Move ponderCandidate = bestRM.pv.moves[1];
                 if (ponderCandidate != MOVE_NONE) {
@@ -458,9 +430,6 @@ void Search::iterative_deepening(Board& board) {
                 int score = bestRM.score;
 
                 if (rootDepth >= 4) {
-                    // Bestmove Stability Factor
-                    // Track how many consecutive iterations the best move has been stable
-                    // More stable = use less time, less stable = use more time
                     if (previousRootBestMove != MOVE_NONE) {
                         if (rootBestMove == previousRootBestMove) {
                             bestMoveStability = std::min(bestMoveStability + 1, 10);
@@ -1108,10 +1077,27 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
 
         // SEE pruning for captures
         // Skip losing captures at low depths
+        // [PERBAIKAN] Don't prune captures that win material (even just a pawn)
         if (!pvNode && depth <= 4 && isCapture) {
-            int seeThreshold = improving ?
-                -SEE_CAPTURE_IMPROVING_FACTOR * depth :
-                -SEE_CAPTURE_NOT_IMPROVING_FACTOR * depth;
+            Piece capturedPiece = board.piece_on(m.to());
+            PieceType capturedType = (capturedPiece != NO_PIECE) ? type_of(capturedPiece) :
+                                     (m.is_enpassant() ? PAWN : NO_PIECE_TYPE);
+
+            // If capturing anything of value (pawn or more), be very lenient with SEE pruning
+            // This prevents missing free material
+            int seeThreshold;
+            if (capturedType >= PAWN && capturedType <= QUEEN) {
+                // For real captures, use much more lenient threshold (-100 * depth)
+                // This means we keep captures unless they lose a LOT of material
+                seeThreshold = improving ?
+                    -100 * depth :
+                    -80 * depth;
+            } else {
+                seeThreshold = improving ?
+                    -SEE_CAPTURE_IMPROVING_FACTOR * depth :
+                    -SEE_CAPTURE_NOT_IMPROVING_FACTOR * depth;
+            }
+
             if (!SEE::see_ge(board, m, seeThreshold)) {
                 continue;
             }
@@ -1168,27 +1154,75 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             }
         }
 
-        // Recapture extension: extend when recapturing on the same square
-        // This helps find important tactical sequences
-        if (isCapture && previousMove != MOVE_NONE &&
-            m.to() == previousMove.to() && currentExtensions < MAX_EXTENSIONS) {
-            // Only extend if the recapture is not obviously bad
-            if (SEE::see_ge(board, m, 0)) {
-                extension = std::max(extension, 1);
+        // =====================================================================
+        // CAPTURE EXTENSION - Extend important tactical captures
+        // =====================================================================
+        if (isCapture && currentExtensions < MAX_EXTENSIONS && !m.is_enpassant()) {
+            Piece captured = board.piece_on(m.to());
+            PieceType capturedPt = type_of(captured);
+
+            // 1. Queen capture extension - capturing queen is almost always critical
+            if (capturedPt == QUEEN && depth >= CAPTURE_EXT_MIN_DEPTH) {
+                if (SEE::see_ge(board, m, 0)) {
+                    extension = std::max(extension, 1);
+                }
+            }
+
+            // 2. Rook trade extension - trading rooks changes game character
+            if (capturedPt == ROOK && movedPt == ROOK && depth >= CAPTURE_EXT_MIN_DEPTH) {
+                if (SEE::see_ge(board, m, 0)) {
+                    extension = std::max(extension, 1);
+                }
+            }
+
+            // 3. Recapture extension - extend when recapturing on the same square
+            if (previousMove != MOVE_NONE && m.to() == previousMove.to()) {
+                if (SEE::see_ge(board, m, 0)) {
+                    extension = std::max(extension, 1);
+                }
+            }
+
+            // 4. High-value capture with good SEE (winning significant material)
+            if (capturedPt == ROOK || capturedPt == QUEEN) {
+                if (SEE::see_ge(board, m, CAPTURE_EXT_SEE_THRESHOLD)) {
+                    extension = std::max(extension, 1);
+                }
             }
         }
 
-        // Singular extension
+        // =====================================================================
+        // SINGULAR EXTENSION - Enhanced with dynamic margins
+        // =====================================================================
         // If the TT move is singular (much better than alternatives), extend it
         if (!singularSearched && depth >= SINGULAR_DEPTH && isTTMove &&
             ttHit && ttBound != BOUND_UPPER && ttDepth >= depth - 3 &&
             std::abs(ttScore) < VALUE_MATE_IN_MAX_PLY && currentExtensions < MAX_EXTENSIONS) {
 
             singularSearched = true;
-            int singularBeta = std::max(ttScore - SINGULAR_MARGIN * depth / 8, -VALUE_MATE);
+
+            // Dynamic singular margin based on multiple factors:
+            int singularMargin = SINGULAR_MARGIN;
+
+            // 1. Wider margin if TT entry is from a shallower search (less reliable)
+            int depthDiff = depth - ttDepth;
+            if (depthDiff > 0) {
+                singularMargin += depthDiff * SINGULAR_TT_DEPTH_PENALTY;
+            }
+
+            // 2. Tighter margin when NOT improving (be more aggressive with extensions)
+            //    because we need to search more carefully in worsening positions
+            if (!improving) {
+                singularMargin -= SINGULAR_IMPROVING_BONUS;
+            }
+
+            // 3. Slightly tighter margin in PV nodes (important lines deserve more search)
+            if (pvNode) {
+                singularMargin -= 5;
+            }
+
+            int singularBeta = std::max(ttScore - singularMargin * depth / 8, -VALUE_MATE);
             int singularDepth = (depth - 1) / 2;
 
-            // Search with excluded move to see if TT move is singular
             ss->excludedMove = m;
             int singularScore = search(board, singularBeta - 1, singularBeta, singularDepth, cutNode);
             ss->excludedMove = MOVE_NONE;
@@ -1197,113 +1231,89 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                 // TT move is singular - extend it
                 extension = 1;
 
-                // Double extension: if singular margin is large and within limit
-                if (!pvNode && singularScore < singularBeta - 50 &&
+                // Dynamic double extension threshold based on depth
+                // Higher depths need larger margin to trigger double extension
+                int doubleExtThreshold = SINGULAR_DOUBLE_EXT_BASE + (depth / 4) * 10;
+
+                // Double extension: if singular margin is very large and within limit
+                if (!pvNode && singularScore < singularBeta - doubleExtThreshold &&
                     doubleExtensions < DOUBLE_EXT_LIMIT) {
                     extension = 2;
-                    ++doubleExtensions;  // Track for child nodes
+                    ++doubleExtensions;
                 }
             } else if (singularBeta >= beta) {
-                // Multi-cut: if the singular search already found a beta cutoff,
-                // we can return beta early
                 return singularBeta;
             }
 
-            // Negative Extension
             else if (cutNode && depth >= NEG_EXT_MIN_DEPTH &&
                      singularScore < alpha - NEG_EXT_THRESHOLD) {
-                // TT move failed but there's no good alternative either
-                // This indicates a tricky position - extend search
                 extension = 1;
             }
         }
 
-        // Triple Extension Prevention
         if (extension > 0 && ply >= rootDepth * MAX_EXTENSION_PLY_RATIO) {
-            extension = 0;  // Suppress extension to prevent explosion
+            extension = 0;
         }
 
         int newDepth = depth - 1 + extension;
 
-        // Track extensions in path
         if (ss->ply >= 0 && ss->ply < MAX_PLY) {
             stack[ply + 2].extensions = currentExtensions + extension;
             stack[ply + 2].doubleExtensions = doubleExtensions;
         }
 
-        // Late Move Reductions (LMR) - IMPROVED TUNING
         int reduction = 0;
         if (depth >= 2 && moveCount > 1 && !isCapture && !isPromotion) {
             reduction = LMRTable[std::min(depth, 63)][std::min(moveCount, 63)];
 
-            // Reduction increases (search less deep)
 
-            // Reduce more in cut nodes (expected to fail high)
             if (cutNode) {
                 reduction += 1;  // Reduced from +2 to preserve tactics
             }
 
-            // Reduce more if not improving (position getting worse)
             if (!improving) {
                 reduction += 1;
             }
 
-            // NOTE: Removed 4-ply improving check - was causing over-pruning
-
-            // Reduce more for very late moves (after move 15, not 10)
             if (moveCount > 15) {
                 reduction += 1;
             }
 
-            // Reduction decreases (search deeper)
-
-            // Reduce less in PV nodes (critical path)
             if (pvNode) {
                 reduction -= 1;
             }
 
-            // Reduce less if in check (tactical situation)
             if (inCheck) {
                 reduction -= 1;
             }
 
-            // Reduce less if gives check (forcing move)
             if (givesCheck) {
                 reduction -= 2;
             }
 
-            // Reduce less for threatening moves
             if (createsThreat) {
                 reduction -= 2;
             }
 
-            // Reduce even less for fork moves (attacking 2+ pieces)
             if (createsFork) {
-                reduction -= 1;  // Additional reduction on top of createsThreat
+                reduction -= 1;
             }
 
-            // Reduce less for killer/counter moves (proven good in siblings)
             if (killers.is_killer(ply, m) ||
                 (previousMove && m == counterMoves.get(board.piece_on(previousMove.to()), previousMove.to()))) {
                 reduction -= 2;
             }
 
-            // Reduce less for TT move
             if (isTTMove) {
                 reduction -= 1;
             }
 
-            // Reduce less if we're improving significantly (strong upward trend)
-            // Scale: every 50cp improvement reduces by 1 ply (max 2)
             if (improvementDelta > 0) {
                 reduction -= std::min(improvementDelta / 50, 2);
             }
 
-            // History-based adjustment (more granular)
             int histScore = history.get(board.side_to_move(), m);
 
-            // Add continuation history scores with configurable weights
-            // Uses weights from search_constants.hpp for better tuning
             PieceType pt = type_of(movedPiece);
             if (contHist1ply) {
                 histScore += CONT_HIST_1PLY_WEIGHT * contHist1ply->get(pt, m.to());
@@ -1311,18 +1321,13 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             if (contHist2ply) {
                 histScore += CONT_HIST_2PLY_WEIGHT * contHist2ply->get(pt, m.to());
             }
-            // 4-ply continuation history (great-grandparent's move context)
-            // This is accessed via stack[ply-2].contHistory if available
             if (ply >= 4 && stack[ply - 2].contHistory) {
                 const ContinuationHistoryEntry* contHist4ply = stack[ply - 2].contHistory;
                 histScore += CONT_HIST_4PLY_WEIGHT * contHist4ply->get(pt, m.to());
             }
 
-            // Scale history adjustment using configurable divisor and max
             reduction -= std::clamp(histScore / HISTORY_LMR_DIVISOR, -HISTORY_LMR_MAX_ADJ, HISTORY_LMR_MAX_ADJ);
 
-            // Clamp reduction
-            // Don't reduce below 1 or into negative/qsearch
             reduction = std::clamp(reduction, 0, newDepth - 1);
         }
 
@@ -1335,11 +1340,8 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         StateInfo si;
         board.do_move(m, si);
 
-        // Prefetch TT entry for the position after this move
-        // This prefetch hides memory latency during the recursive search
         TT.prefetch(board.key());
 
-        // Root Node Subtree Size Counting
         U64 nodesBefore = 0;
         if (rootNode) {
             nodesBefore = searchStats.nodes;
@@ -1616,25 +1618,35 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
             ++legalMoveCount;
         }
 
-        // Delta pruning (hanya untuk captures saat TIDAK dalam skak)
-        // Skip pruning for major piece captures to avoid missing sacrifices
-        // [PERBAIKAN] Increased margin from 250 to 400 for better tactical accuracy
-        if (!inCheck && !m.is_promotion()) {
-            PieceType capturedPt = type_of(board.piece_on(m.to()));
-            int captureValue = PieceValue[capturedPt];
+        PieceType capturedPt = NO_PIECE_TYPE;
+        int captureValue = 0;
 
-            // Use larger margin (400) to be more conservative about pruning
-            // Don't prune if capturing queen or rook (could be important sacrifice)
-            if (capturedPt != QUEEN && capturedPt != ROOK) {
-                if (staticEval + captureValue + 400 < alpha) {
+        if (!m.is_enpassant()) {
+            capturedPt = type_of(board.piece_on(m.to()));
+            captureValue = PieceValue[capturedPt];
+        } else {
+            capturedPt = PAWN;
+            captureValue = PieceValue[PAWN];
+        }
+
+        if (!inCheck && !m.is_promotion()) {
+            // Never prune captures of valuable pieces (Queen, Rook, or any piece worth >= pawn)
+            // This ensures we don't miss free material
+            if (capturedPt != QUEEN && capturedPt != ROOK && capturedPt != KNIGHT && capturedPt != BISHOP) {
+                // Use very large margin (500) to be conservative
+                // Only prune if we're way below alpha and the capture can't possibly help
+                if (staticEval + captureValue + 500 < alpha) {
                     continue;  // Can't raise alpha
                 }
             }
         }
 
         // SEE pruning (hanya saat TIDAK dalam skak)
-        if (!inCheck && !SEE::see_ge(board, m, -50)) {
-            continue;  // Losing capture
+        bool seeWinning = (captureValue >= PieceValue[PAWN]);
+        int seeThreshold = seeWinning ? -200 : -100;
+
+        if (!inCheck && !seeWinning && !SEE::see_ge(board, m, seeThreshold)) {
+            continue;  // Losing capture - but only if not capturing real material
         }
 
         // Make move

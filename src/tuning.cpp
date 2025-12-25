@@ -17,19 +17,19 @@ namespace Tuning {
     // Piece Activity Bonuses (Texel Tuned)
     EvalScore BishopPairBonus       = S( 0,  0);
     EvalScore RookOpenFileBonus     = S( 0,  0);
-    EvalScore RookSemiOpenFileBonus = S( 0,  18);
+    EvalScore RookSemiOpenFileBonus = S( 5,  3);
     EvalScore RookOnSeventhBonus    = S( 0,  0);
     EvalScore KnightOutpostBonus    = S( 0,  0);
 
     // Pawn Structure (Texel Tuned)
-    EvalScore IsolatedPawnPenalty   = S(-56,   0);
-    EvalScore DoubledPawnPenalty    = S(-27, -17);
+    EvalScore IsolatedPawnPenalty   = S(-48,   0);
+    EvalScore DoubledPawnPenalty    = S(-15, -19);
     EvalScore BackwardPawnPenalty   = S( 0,   0);
     EvalScore ConnectedPawnBonus    = S( 0,   2);
     EvalScore PhalanxBonus          = S( 0,   0);
 
     // King Safety
-    int KingSafetyWeight = 83;  // Scale factor (percentage)
+    int KingSafetyWeight = 78;  // Scale factor (percentage)
 
     void init() {
         // Initialization logic if needed

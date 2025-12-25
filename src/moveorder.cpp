@@ -441,10 +441,11 @@ Move MovePicker::next_move() {
             while (currentIdx < moves.size()) {
                 m = pick_best();
                 if (is_tt_move(m)) continue;
-                // Only good captures in qsearch
-                if (moves[currentIdx - 1].score >= SCORE_EQUAL_CAP) {
-                    return m;
-                }
+                // [PERBAIKAN] Return ALL captures, let qsearch handle pruning
+                // Previously we only returned "good" captures which caused missing
+                // winning material in positions where static SEE was misleading
+                // The qsearch function already does its own SEE/delta pruning
+                return m;
             }
             ++stage;
             [[fallthrough]];

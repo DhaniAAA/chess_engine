@@ -220,15 +220,7 @@ private:
     }
 };
 
-// ============================================================================
 // Continuation History
-//
-// Tracks how successful a move is relative to the previous move (1-ply ago)
-// and the move before that (2-ply ago). This provides context-aware scoring
-// that significantly improves move ordering.
-//
-// Indexed by [PieceType of prev move][ToSquare of prev move][PieceType of curr move][ToSquare of curr move]
-// ============================================================================
 
 // Forward declaration for pointer type
 class ContinuationHistoryEntry;

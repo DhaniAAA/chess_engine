@@ -55,7 +55,14 @@ constexpr int MAX_EXTENSIONS = 16;           // Maximum total extensions in path
 
 // Singular extension parameters
 constexpr int SINGULAR_DEPTH = 6;            // Minimum depth for singular extension
-constexpr int SINGULAR_MARGIN = 64;          // Score margin for singularity
+constexpr int SINGULAR_MARGIN = 64;          // Base score margin for singularity
+constexpr int SINGULAR_TT_DEPTH_PENALTY = 8; // Additional margin per depth difference
+constexpr int SINGULAR_IMPROVING_BONUS = 10; // Tighter margin when not improving
+constexpr int SINGULAR_DOUBLE_EXT_BASE = 40; // Base threshold for double extension
+
+// Capture extension parameters
+constexpr int CAPTURE_EXT_MIN_DEPTH = 6;     // Minimum depth for capture extension
+constexpr int CAPTURE_EXT_SEE_THRESHOLD = 200; // SEE threshold for extending captures
 
 // ============================================================================
 // Multi-Cut Parameters
