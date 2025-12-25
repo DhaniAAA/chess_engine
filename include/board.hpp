@@ -129,6 +129,10 @@ public:
     // Incremental PST score (material + piece-square values)
     EvalScore psqt_score(Color c) const { return st->psqtScore[c]; }
 
+    // Draw detection
+    bool is_draw(int ply) const;       // Check for draw (repetition, 50-move, insufficient material)
+    bool has_repeated() const;          // Check if current position has occurred before
+
     // ========================================================================
     // Attack Detection
     // ========================================================================

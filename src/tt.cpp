@@ -128,6 +128,34 @@ TTEntry* TranspositionTable::probe(Key key, bool& found) {
     return replace;
 }
 
+void TranspositionTable::get_moves(Key key, Move* moves, int& count) {
+    count = 0;
+    if (!table || clusterCount == 0) return;
+
+    TTEntry* entry = first_entry(key);
+    U16 key16 = static_cast<U16>(key >> 48);
+
+    for (int i = 0; i < TTCluster::ENTRIES_PER_CLUSTER; ++i) {
+        if (entry[i].key16 == key16) {
+            Move m = entry[i].move();
+            if (m != MOVE_NONE) {
+                // Check for duplicates
+                bool duplicate = false;
+                for (int j = 0; j < count; ++j) {
+                    if (moves[j] == m) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+
+                if (!duplicate && count < TTCluster::ENTRIES_PER_CLUSTER) {
+                    moves[count++] = m;
+                }
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Hash Usage
 // ============================================================================

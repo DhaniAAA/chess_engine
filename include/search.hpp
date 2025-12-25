@@ -201,17 +201,25 @@ struct RootMove {
     int score = -VALUE_INFINITE;
     int previousScore = -VALUE_INFINITE;
     int selDepth = 0;
+    U64 subtreeNodes = 0;      // Nodes searched in subtree (for ordering)
+    U64 prevSubtreeNodes = 0;  // Subtree nodes from previous iteration
     PVLine pv;
 
     // Constructor
     RootMove() = default;
-    explicit RootMove(Move m) : move(m), score(-VALUE_INFINITE), previousScore(-VALUE_INFINITE), selDepth(0) {
+    explicit RootMove(Move m) : move(m), score(-VALUE_INFINITE), previousScore(-VALUE_INFINITE),
+                                 selDepth(0), subtreeNodes(0), prevSubtreeNodes(0) {
         pv.clear();
     }
 
-    // Comparison operators for sorting (by score, descending)
+    // Comparison operators for sorting (by score, then subtree size, descending)
     bool operator<(const RootMove& other) const {
-        return score != other.score ? score > other.score : previousScore > other.previousScore;
+        // Primary: sort by score (higher is better)
+        if (score != other.score) return score > other.score;
+        // Secondary: sort by previous score
+        if (previousScore != other.previousScore) return previousScore > other.previousScore;
+        // Tertiary: sort by subtree size (larger subtrees are more important)
+        return prevSubtreeNodes > other.prevSubtreeNodes;
     }
 
     bool operator==(Move m) const {

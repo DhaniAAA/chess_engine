@@ -496,13 +496,21 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
     // TT probe
     bool ttHit = false;
     TTEntry* tte = TT.probe(board.key(), ttHit);
-    Move ttMove = ttHit ? tte->move() : MOVE_NONE;
+
+    // Get multiple moves
+    Move ttMoves[3];
+    int ttMoveCount = 0;
+    TT.get_moves(board.key(), ttMoves, ttMoveCount);
+
+    // Primary Move
+    Move ttMove = (ttMoveCount > 0) ? ttMoves[0] : MOVE_NONE;
 
     // [TT VALIDATION] Validate ttMove is pseudo-legal AND legal to prevent hash collision issues
     // If the move is illegal (could happen with hash collision), ignore the entire TT entry
     if (ttMove != MOVE_NONE && (!MoveGen::is_pseudo_legal(board, ttMove) || !MoveGen::is_legal(board, ttMove))) {
         ttMove = MOVE_NONE;
         ttHit = false;  // Treat as if we didn't find anything
+        if (ttMoveCount > 0) ttMoves[0] = MOVE_NONE;
     }
 
     int ttScore = ttHit ? score_from_tt(tte->score(), ply) : VALUE_NONE;
@@ -585,7 +593,8 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
     if (!ttMove && depth >= 6 && (pvNode || cutNode)) {
         alpha_beta(thread, board, alpha, beta, depth - 2, cutNode, ply);
         tte = TT.probe(board.key(), ttHit);
-        ttMove = ttHit ? tte->move() : MOVE_NONE;
+        // ttMoves update logic skipped for IID simplicity, usually ttMove is enough
+        ttMove = ttHit ? tte->move() : MOVE_NONE; // Re-probe single move for IID
     }
 
     // Move loop
@@ -595,7 +604,7 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
     Move quietsSearched[64];
     int quietCount = 0;
 
-    MovePicker mp(board, ttMove, ply, thread->killers, thread->counterMoves,
+    MovePicker mp(board, ttMoves, ttMoveCount, ply, thread->killers, thread->counterMoves,
                   thread->history, thread->previousMove);
     Move m;
 
@@ -750,9 +759,15 @@ int qsearch(SearchThread* thread, Board& board, int alpha, int beta, int ply) {
 
     bool ttHit = false;
     TTEntry* tte = TT.probe(board.key(), ttHit);
-    Move ttMove = ttHit ? tte->move() : MOVE_NONE;
 
-    MovePicker mp(board, ttMove, thread->history);
+    // Get multiple moves
+    Move ttMoves[3];
+    int ttMoveCount = 0;
+    TT.get_moves(board.key(), ttMoves, ttMoveCount);
+
+    Move ttMove = (ttMoveCount > 0) ? ttMoves[0] : MOVE_NONE;
+
+    MovePicker mp(board, ttMoves, ttMoveCount, thread->history);
     Move m;
     int bestScore = inCheck ? -VALUE_INFINITE : staticEval;
     int moveCount = 0;

@@ -108,6 +108,10 @@ public:
     // Sets 'found' to true if the entry matches the key
     TTEntry* probe(Key key, bool& found);
 
+    // Get all moves for a position (if multiple entries exist)
+    // Fills the moves array (max 3) and sets count
+    void get_moves(Key key, Move* moves, int& count);
+
     // Get estimated usage (permille, 0-1000)
     int hashfull() const;
 

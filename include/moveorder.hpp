@@ -12,12 +12,15 @@
 
 constexpr int SCORE_TT_MOVE      = 10000000;  // Hash move from TT
 constexpr int SCORE_WINNING_CAP  = 8000000;   // Winning capture (SEE > 0)
-constexpr int SCORE_PROMOTION    = 7000000;   // Promotion moves
+constexpr int SCORE_QUEEN_PROMO  = 7500000;   // Queen promotion (highest priority)
+constexpr int SCORE_PROMOTION    = 7000000;   // Capture + promotion
 constexpr int SCORE_EQUAL_CAP    = 6000000;   // Equal capture (SEE == 0)
 constexpr int SCORE_KILLER_1     = 5000000;   // First killer move
 constexpr int SCORE_KILLER_2     = 4000000;   // Second killer move
 constexpr int SCORE_COUNTER      = 3000000;   // Counter move
+constexpr int SCORE_KNIGHT_PROMO = 1000000;   // Knight promotion (can be tactical)
 constexpr int SCORE_LOSING_CAP   = 0;         // Losing capture (SEE < 0), sorted after quiets
+constexpr int SCORE_UNDERPROM    = -5000000;  // Underpromotion (Rook/Bishop) - last
 
 // ============================================================================
 // Piece Values for MVV-LVA and SEE
@@ -334,7 +337,7 @@ inline MovePickStage& operator++(MovePickStage& s) {
 class MovePicker {
 public:
     // Constructor for main search (with continuation history)
-    MovePicker(const Board& b, Move ttMove, int ply,
+    MovePicker(const Board& b, const Move* ttMoves, int ttMoveCount, int ply,
                const KillerTable& kt, const CounterMoveTable& cm,
                const HistoryTable& ht, Move prevMove,
                const ContinuationHistoryEntry* contHist1 = nullptr,
@@ -342,10 +345,10 @@ public:
                const int (*captureHistory)[64][8] = nullptr);
 
     // Constructor for quiescence search (basic - no capture history)
-    MovePicker(const Board& b, Move ttMove, const HistoryTable& ht);
+    MovePicker(const Board& b, const Move* ttMoves, int ttMoveCount, const HistoryTable& ht);
 
     // Constructor for quiescence search (advanced - with capture history)
-    MovePicker(const Board& b, Move ttMove, const HistoryTable& ht,
+    MovePicker(const Board& b, const Move* ttMoves, int ttMoveCount, const HistoryTable& ht,
                const int (*captureHistory)[64][8]);
 
     // Get next move (returns MOVE_NONE when exhausted)
@@ -360,7 +363,10 @@ private:
     const ContinuationHistoryEntry* contHist2ply;  // 2-ply ago continuation history
     const int (*captureHistory)[64][8];            // Capture history pointer
 
-    Move ttMove;
+    Move ttMoves[3];
+    int ttMoveCount;
+    int ttMoveIdx;   // Current TT move index
+
     Move killer1, killer2;
     Move counterMove;
 
@@ -374,6 +380,7 @@ private:
     void score_captures();
     void score_quiets();
     Move pick_best();
+    bool is_tt_move(Move m) const;
 };
 
 #endif // MOVEORDER_HPP

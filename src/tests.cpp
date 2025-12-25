@@ -146,7 +146,8 @@ void test_move_ordering() {
     kt.store(0, Move::make(SQ_B1, SQ_C3));
 
     // Get moves in order
-    MovePicker mp(board, MOVE_NONE, 0, kt, cm, ht, MOVE_NONE);
+    Move ttMoves[3] = {MOVE_NONE, MOVE_NONE, MOVE_NONE};
+    MovePicker mp(board, ttMoves, 0, 0, kt, cm, ht, MOVE_NONE);
 
     std::cout << "Moves in priority order (first 10):\n";
     Move m;

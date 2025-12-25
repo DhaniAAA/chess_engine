@@ -589,6 +589,22 @@ void Board::do_move(Move m, StateInfo& newSt) {
     // Update state
     st->positionKey = k;
     st->pliesFromNull++;
+
+    // Update repetition counter
+    // Search backwards through previous positions for repetition
+    st->repetition = 0;
+    int end = std::min(st->halfmoveClock, st->pliesFromNull);
+    if (end >= 4) {
+        StateInfo* stp = st->previous->previous;  // Start from 2 plies ago
+        for (int i = 4; i <= end; i += 2) {
+            stp = stp->previous->previous;
+            if (stp->positionKey == st->positionKey) {
+                st->repetition = stp->repetition ? -i : i;
+                break;
+            }
+        }
+    }
+
     sideToMove = them;
     ++gamePly;
 
@@ -675,3 +691,65 @@ void Board::undo_null_move() {
     --gamePly;
 }
 
+// ============================================================================
+// Draw Detection
+// ============================================================================
+
+// Check if current position is a draw
+// ply = search ply (distance from root) - used for repetition rules
+bool Board::is_draw(int ply) const {
+    // 50-move rule: if 100 half-moves have passed without pawn move or capture
+    if (st->halfmoveClock >= 100) {
+        // Exception: if we can deliver checkmate on this move, it's not a draw
+        if (in_check()) {
+            // If in check and it's 50-move draw, we need to check if there are legal moves
+            // If no legal moves, it's checkmate (not draw)
+            // This is handled elsewhere, so just return true for draw
+            return true;
+        }
+        return true;
+    }
+
+    // 3-fold repetition
+    // st->repetition stores:
+    //   0 = no repetition
+    //   positive = first repetition (2-fold)
+    //   negative = second repetition (3-fold, actual draw)
+    if (st->repetition) {
+        // If repetition is negative, it's a 3-fold (immediate draw)
+        if (st->repetition < 0) {
+            return true;
+        }
+
+        // If repetition is positive and within current search (ply distance),
+        // treat it as draw (2-fold within search line = draw for practical purposes)
+        // This prevents engine from entering repetition cycles
+        if (ply >= st->repetition) {
+            return true;
+        }
+    }
+
+    // Insufficient material (K vs K, KN vs K, KB vs K, etc.)
+    // Simple check: if no pawns and total material is very low
+    int totalPieces = popcount(pieces());
+    if (totalPieces <= 3) {
+        // K vs K
+        if (totalPieces == 2) {
+            return true;
+        }
+
+        // KN vs K or KB vs K
+        if (totalPieces == 3) {
+            if (pieces(KNIGHT) || pieces(BISHOP)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// Check if current position has occurred before (for UCI purposes)
+bool Board::has_repeated() const {
+    return st->repetition != 0;
+}

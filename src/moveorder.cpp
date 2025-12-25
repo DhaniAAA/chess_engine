@@ -163,7 +163,7 @@ bool SEE::see_ge(const Board& board, Move m, int threshold) {
 // Move Picker Implementation
 // ============================================================================
 
-MovePicker::MovePicker(const Board& b, Move tt, int p,
+MovePicker::MovePicker(const Board& b, const Move* tm, int count, int p,
                        const KillerTable& kt, const CounterMoveTable& cm,
                        const HistoryTable& ht, Move prevMove,
                        const ContinuationHistoryEntry* contHist1,
@@ -172,7 +172,11 @@ MovePicker::MovePicker(const Board& b, Move tt, int p,
     : board(b), history(ht), killers(&kt), counterMoves(&cm),
       contHist1ply(contHist1), contHist2ply(contHist2),
       captureHistory(ch),
-      ttMove(tt), currentIdx(0), ply(p), stage(STAGE_TT_MOVE) {
+      ttMoveCount(count), ttMoveIdx(0), currentIdx(0), ply(p), stage(STAGE_TT_MOVE) {
+
+    for (int i = 0; i < 3; ++i) {
+        ttMoves[i] = (i < count) ? tm[i] : MOVE_NONE;
+    }
 
     killer1 = kt.get(p, 0);
     killer2 = kt.get(p, 1);
@@ -185,25 +189,67 @@ MovePicker::MovePicker(const Board& b, Move tt, int p,
     }
 }
 
-MovePicker::MovePicker(const Board& b, Move tt, const HistoryTable& ht)
+MovePicker::MovePicker(const Board& b, const Move* tm, int count, const HistoryTable& ht)
     : board(b), history(ht), killers(nullptr), counterMoves(nullptr),
       contHist1ply(nullptr), contHist2ply(nullptr), captureHistory(nullptr),
-      ttMove(tt), killer1(MOVE_NONE), killer2(MOVE_NONE),
+      ttMoveCount(count), ttMoveIdx(0), killer1(MOVE_NONE), killer2(MOVE_NONE),
       counterMove(MOVE_NONE), currentIdx(0), ply(0),
-      stage(STAGE_QS_TT_MOVE) {}
+      stage(STAGE_QS_TT_MOVE) {
+
+    for (int i = 0; i < 3; ++i) {
+        ttMoves[i] = (i < count) ? tm[i] : MOVE_NONE;
+    }
+}
 
 // QSearch constructor with capture history for improved ordering
-MovePicker::MovePicker(const Board& b, Move tt, const HistoryTable& ht,
+MovePicker::MovePicker(const Board& b, const Move* tm, int count, const HistoryTable& ht,
                        const int (*ch)[64][8])
     : board(b), history(ht), killers(nullptr), counterMoves(nullptr),
       contHist1ply(nullptr), contHist2ply(nullptr), captureHistory(ch),
-      ttMove(tt), killer1(MOVE_NONE), killer2(MOVE_NONE),
+      ttMoveCount(count), ttMoveIdx(0), killer1(MOVE_NONE), killer2(MOVE_NONE),
       counterMove(MOVE_NONE), currentIdx(0), ply(0),
-      stage(STAGE_QS_TT_MOVE) {}
+      stage(STAGE_QS_TT_MOVE) {
+
+    for (int i = 0; i < 3; ++i) {
+        ttMoves[i] = (i < count) ? tm[i] : MOVE_NONE;
+    }
+}
+
+bool MovePicker::is_tt_move(Move m) const {
+    for (int i = 0; i < ttMoveCount; ++i) {
+        if (ttMoves[i] == m) return true;
+    }
+    return false;
+}
 
 void MovePicker::score_captures() {
     for (auto& sm : moves) {
         Move m = sm.move;
+
+        // Handle promotions with priority
+        if (m.is_promotion()) {
+            PieceType promo = m.promotion_type();
+            if (promo == QUEEN) {
+                // Queen promotion: very high priority
+                sm.score = SCORE_QUEEN_PROMO + PieceValue[QUEEN];
+                // Add capture bonus if applicable
+                Piece captured = board.piece_on(m.to());
+                if (captured != NO_PIECE) {
+                    sm.score += PieceValue[type_of(captured)];
+                }
+            } else if (promo == KNIGHT) {
+                // Knight promotion: can be tactical (discovered check, fork)
+                sm.score = SCORE_KNIGHT_PROMO;
+                Piece captured = board.piece_on(m.to());
+                if (captured != NO_PIECE) {
+                    sm.score += PieceValue[type_of(captured)];
+                }
+            } else {
+                // Rook/Bishop underpromotion: almost never useful
+                sm.score = SCORE_UNDERPROM;
+            }
+            continue;
+        }
 
         // Use SEE for good/bad capture separation
         int see_value = SEE::evaluate(board, m);
@@ -215,7 +261,6 @@ void MovePicker::score_captures() {
             // Add Capture History bonus
             if (captureHistory) {
                 Piece pc = board.piece_on(m.from());
-                PieceType pt = type_of(pc);
                 Piece captured = board.piece_on(m.to());
                 if (captured != NO_PIECE) {
                     PieceType capturedPt = type_of(captured);
@@ -269,9 +314,17 @@ void MovePicker::score_quiets() {
             sm.score = histScore + 2 * contHist1Score + contHist2Score;
         }
 
-        // Bonus for promotions
+        // Handle promotions with piece-specific scoring
         if (m.is_promotion()) {
-            sm.score += SCORE_PROMOTION;
+            PieceType promo = m.promotion_type();
+            if (promo == QUEEN) {
+                sm.score += SCORE_QUEEN_PROMO;
+            } else if (promo == KNIGHT) {
+                sm.score += SCORE_KNIGHT_PROMO;
+            } else {
+                // Rook/Bishop underpromotion: search last
+                sm.score = SCORE_UNDERPROM;
+            }
         }
     }
 }
@@ -288,10 +341,13 @@ Move MovePicker::next_move() {
 
     switch (stage) {
         case STAGE_TT_MOVE:
-            ++stage;
-            if (ttMove && MoveGen::is_pseudo_legal(board, ttMove)) {
-                return ttMove;
+            while (ttMoveIdx < ttMoveCount) {
+                m = ttMoves[ttMoveIdx++];
+                if (m && MoveGen::is_pseudo_legal(board, m)) {
+                    return m;
+                }
             }
+            ++stage;
             [[fallthrough]];
 
         case STAGE_GENERATE_CAPTURES:
@@ -304,7 +360,7 @@ Move MovePicker::next_move() {
         case STAGE_GOOD_CAPTURES:
             while (currentIdx < moves.size()) {
                 m = pick_best();
-                if (m == ttMove) continue;
+                if (is_tt_move(m)) continue;
                 if (moves[currentIdx - 1].score < SCORE_EQUAL_CAP) {
                     // Switch to killers, save bad captures for later
                     break;
@@ -316,7 +372,7 @@ Move MovePicker::next_move() {
 
         case STAGE_KILLER_1:
             ++stage;
-            if (killer1 && killer1 != ttMove &&
+            if (killer1 && !is_tt_move(killer1) &&
                 MoveGen::is_pseudo_legal(board, killer1) &&
                 board.empty(killer1.to())) {
                 return killer1;
@@ -325,7 +381,7 @@ Move MovePicker::next_move() {
 
         case STAGE_KILLER_2:
             ++stage;
-            if (killer2 && killer2 != ttMove &&
+            if (killer2 && !is_tt_move(killer2) &&
                 MoveGen::is_pseudo_legal(board, killer2) &&
                 board.empty(killer2.to())) {
                 return killer2;
@@ -334,7 +390,7 @@ Move MovePicker::next_move() {
 
         case STAGE_COUNTER_MOVE:
             ++stage;
-            if (counterMove && counterMove != ttMove &&
+            if (counterMove && !is_tt_move(counterMove) &&
                 counterMove != killer1 && counterMove != killer2 &&
                 MoveGen::is_pseudo_legal(board, counterMove) &&
                 board.empty(counterMove.to())) {
@@ -353,7 +409,7 @@ Move MovePicker::next_move() {
         case STAGE_QUIETS:
             while (currentIdx < moves.size()) {
                 m = pick_best();
-                if (m == ttMove || m == killer1 || m == killer2 || m == counterMove) {
+                if (is_tt_move(m) || m == killer1 || m == killer2 || m == counterMove) {
                     continue;
                 }
                 return m;
@@ -365,7 +421,7 @@ Move MovePicker::next_move() {
         case STAGE_BAD_CAPTURES:
             while (currentIdx < badCaptures.size()) {
                 m = badCaptures[currentIdx++].move;
-                if (m == ttMove) continue;
+                if (is_tt_move(m)) continue;
                 return m;
             }
             ++stage;
@@ -376,10 +432,13 @@ Move MovePicker::next_move() {
 
         // Quiescence search stages
         case STAGE_QS_TT_MOVE:
-            ++stage;
-            if (ttMove && MoveGen::is_pseudo_legal(board, ttMove)) {
-                return ttMove;
+            while (ttMoveIdx < ttMoveCount) {
+                m = ttMoves[ttMoveIdx++];
+                if (m && MoveGen::is_pseudo_legal(board, m)) {
+                    return m;
+                }
             }
+            ++stage;
             [[fallthrough]];
 
         case STAGE_QS_GENERATE_CAPTURES:
@@ -391,7 +450,7 @@ Move MovePicker::next_move() {
         case STAGE_QS_CAPTURES:
             while (currentIdx < moves.size()) {
                 m = pick_best();
-                if (m == ttMove) continue;
+                if (is_tt_move(m)) continue;
                 // Only good captures in qsearch
                 if (moves[currentIdx - 1].score >= SCORE_EQUAL_CAP) {
                     return m;

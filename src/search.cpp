@@ -286,9 +286,11 @@ void Search::iterative_deepening(Board& board) {
     // Iterative deepening loop
     for (rootDepth = 1; rootDepth <= maxDepth && !stopped; ++rootDepth) {
 
-        // Save previous scores for all root moves
+        // Save previous scores and subtree nodes for all root moves ordering
         for (auto& rm : rootMoves) {
             rm.previousScore = rm.score;
+            rm.prevSubtreeNodes = rm.subtreeNodes;
+            rm.subtreeNodes = 0; // Reset for current iteration
         }
 
         // MultiPV loop - search each PV line
@@ -492,6 +494,12 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
 
     ++searchStats.nodes;
 
+    // Draw detection: check for repetition, 50-move rule, insufficient material
+    // Skip at root node (ply 0) to ensure we return a move
+    if (ply > 0 && board.is_draw(ply)) {
+        return 0;  // Draw score
+    }
+
     // Mate distance pruning
     alpha = std::max(alpha, -VALUE_MATE + ply);
     beta = std::min(beta, VALUE_MATE - ply - 1);
@@ -505,16 +513,29 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     }
 
     // Transposition table probe
+    // Transposition table probe
     bool ttHit = false;
     TTEntry* tte = TT.probe(board.key(), ttHit);
-    Move ttMove = ttHit ? tte->move() : MOVE_NONE;
 
-    // [PERBAIKAN] Validasi ttMove dengan is_pseudo_legal dan is_legal.
-    // Jika ilegal (misal hash collision), abaikan seluruh entry TT untuk mencegah
-    // crash atau cutoff yang salah.
+    Move ttMoves[3];
+    int ttMoveCount = 0;
+    TT.get_moves(board.key(), ttMoves, ttMoveCount);
+
+    // Primary Move for heuristics (take first available)
+    Move ttMove = (ttMoveCount > 0) ? ttMoves[0] : MOVE_NONE;
+    if (!ttHit && ttMove != MOVE_NONE) {
+        // If probe says no hit (e.g. empty), but get_moves found something(?), trust probe slightly less or use move anyway.
+        // Actually probe returns entry even if not found.
+        // But get_moves only returns matches.
+        // So trust get_moves for the move.
+    }
+
+    // Validate valid moves to avoid illegal moves from hash collisions
     if (ttMove != MOVE_NONE && (!MoveGen::is_pseudo_legal(board, ttMove) || !MoveGen::is_legal(board, ttMove))) {
         ttMove = MOVE_NONE;
-        ttHit = false;
+        ttHit = false; // Disable cutoff if primary move is corrupt
+        // Clear corrupt move from list so MovePicker doesn't try it
+        if (ttMoveCount > 0) ttMoves[0] = MOVE_NONE;
     }
     int ttScore = ttHit ? score_from_tt(tte->score(), ply) : VALUE_NONE;
     int ttDepth = ttHit ? tte->depth() : 0;
@@ -793,7 +814,7 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     const ContinuationHistoryEntry* contHist2ply = (ply >= 2 && ply < MAX_PLY + 4 && stack[ply].contHistory) ?
                                                     stack[ply].contHistory : nullptr;
 
-    MovePicker mp(board, ttMove, ply, killers, counterMoves, history, previousMove,
+    MovePicker mp(board, ttMoves, ttMoveCount, ply, killers, counterMoves, history, previousMove,
                   contHist1ply, contHist2ply, captureHistory);
 
     size_t rootMoveIdx = 0;
@@ -1112,6 +1133,12 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
         StateInfo si;
         board.do_move(m, si);
 
+        // Root Node Subtree Size Counting
+        U64 nodesBefore = 0;
+        if (rootNode) {
+            nodesBefore = searchStats.nodes;
+        }
+
         int score;
 
         // Principal Variation Search
@@ -1135,6 +1162,23 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
 
         // Undo the move
         board.undo_move(m);
+
+        // Update subtree node count for root moves
+        if (rootNode) {
+            U64 nodesAfter = searchStats.nodes;
+            U64 nodeDiff = nodesAfter - nodesBefore;
+
+            // Find the current move in rootMoves and update its subtree node count
+            // Note: Since we are iterating via MovePicker or loop, we need to find by move
+            // Optimization: we could track index, but search loop structure makes it tricky.
+            // Linear scan is fine for calculating root moves (typically < 50 legal moves)
+            for (auto& rm : rootMoves) {
+                if (rm.move == m) {
+                    rm.subtreeNodes += nodeDiff;
+                    break;
+                }
+            }
+        }
 
         if (stopped) {
             return 0;
@@ -1340,16 +1384,22 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
     // TT probe for move ordering
     bool ttHit = false;
     TTEntry* tte = TT.probe(board.key(), ttHit);
-    Move ttMove = ttHit ? tte->move() : MOVE_NONE;
+
+    Move ttMoves[3];
+    int ttMoveCount = 0;
+    TT.get_moves(board.key(), ttMoves, ttMoveCount);
+
+    Move ttMove = (ttMoveCount > 0) ? ttMoves[0] : MOVE_NONE;
 
     // Validasi ttMove di qsearch dengan is_pseudo_legal dan is_legal
     if (ttMove != MOVE_NONE && (!MoveGen::is_pseudo_legal(board, ttMove) || !MoveGen::is_legal(board, ttMove))) {
         ttMove = MOVE_NONE;
         ttHit = false;
+        if (ttMoveCount > 0) ttMoves[0] = MOVE_NONE;
     }
 
     // Use MovePicker with capture history for better ordering in qsearch
-    MovePicker mp(board, ttMove, history, captureHistory);
+    MovePicker mp(board, ttMoves, ttMoveCount, history, captureHistory);
     Move m;
     int bestScore = inCheck ? -VALUE_INFINITE : staticEval;
 
