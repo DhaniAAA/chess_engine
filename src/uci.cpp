@@ -23,7 +23,7 @@ TimeManager timeMgr;
 // ============================================================================
 
 const std::string ENGINE_NAME = "GC-Engine";
-const std::string ENGINE_AUTHOR = "Gemini & Claude Alliance";
+const std::string ENGINE_AUTHOR = "Dhani";
 const std::string ENGINE_VERSION = "1.0";
 
 // ============================================================================

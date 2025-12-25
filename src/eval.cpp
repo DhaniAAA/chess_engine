@@ -149,6 +149,10 @@ EvalScore eval_pawn_structure(const Board& board, Color c) {
     Color enemy = ~c;
     Bitboard ourPawns = board.pieces(c, PAWN);
     Bitboard theirPawns = board.pieces(enemy, PAWN);
+    Bitboard ourRooks = board.pieces(c, ROOK);
+    Square ourKingSq = board.king_square(c);
+    Square enemyKingSq = board.king_square(enemy);
+
 
     // First pass: identify all passed pawns for connected passed pawn detection
     Bitboard passedPawns = 0;
@@ -181,6 +185,36 @@ EvalScore eval_pawn_structure(const Board& board, Color c) {
 
                 if (adjacentPassers & supportRange) {
                     score += ConnectedPassedBonus[r];
+                }
+            }
+
+            // King proximity to passed pawn (important in endgame)
+            int ourKingDist = std::max(std::abs(file_of(ourKingSq) - f),
+                                       std::abs(rank_of(ourKingSq) - rank_of(sq)));
+            int enemyKingDist = std::max(std::abs(file_of(enemyKingSq) - f),
+                                         std::abs(rank_of(enemyKingSq) - rank_of(sq)));
+            // In endgame: bonus if our king is close, penalty if enemy king is close
+            score.eg += (enemyKingDist - ourKingDist) * 5;  // Up to +/- 35 for max distance diff
+
+            // Rook behind passed pawn bonus
+            // Check if rook is behind (opposite direction from promotion)
+            // Invert: check if rook is behind (opposite direction from promotion)
+            Bitboard behindPawn = c == WHITE ?
+                (file_bb(f) & (square_bb(sq) - 1)) :  // Squares below for white
+                (file_bb(f) & ~(square_bb(sq) | (square_bb(sq) - 1)));  // Squares above for black
+            if (behindPawn & ourRooks) {
+                score.mg += 15;
+                score.eg += 25;  // More valuable in endgame
+            }
+
+            // Blockaded passed pawn penalty
+            Square stopSq = c == WHITE ? Square(sq + 8) : Square(sq - 8);
+            if (stopSq >= SQ_A1 && stopSq <= SQ_H8) {
+                Piece blocker = board.piece_on(stopSq);
+                if (blocker != NO_PIECE && color_of(blocker) == enemy) {
+                    // Passed pawn is blocked
+                    score.mg -= 10;
+                    score.eg -= 20;  // More significant in endgame
                 }
             }
         }
@@ -222,6 +256,7 @@ EvalScore eval_pieces(const Board& board, Color c) {
     Bitboard ourPawns = board.pieces(c, PAWN);
     Bitboard theirPawns = board.pieces(enemy, PAWN);
     Bitboard mobilityArea = ~(board.pieces(c) | pawn_attacks_bb(enemy, theirPawns));
+    Square enemyKingSq = board.king_square(enemy);
 
     // Knights
     Bitboard bb = board.pieces(c, KNIGHT);
@@ -239,6 +274,12 @@ EvalScore eval_pieces(const Board& board, Color c) {
                 score += KnightOutpostBonus;
             }
         }
+
+        // Knight tropism - bonus for knights close to enemy king
+        int kingDist = std::max(std::abs(file_of(sq) - file_of(enemyKingSq)),
+                                std::abs(rank_of(sq) - rank_of(enemyKingSq)));
+        // Closer = better, max bonus at distance 1-2
+        score.mg += std::max(0, (5 - kingDist) * 3);  // Up to 12cp for adjacent squares
     }
 
     // Bishops
@@ -250,6 +291,17 @@ EvalScore eval_pieces(const Board& board, Color c) {
         Bitboard attacks = bishop_attacks_bb(sq, occupied);
         int mobility = popcount(attacks & mobilityArea);
         score += BishopMobility[std::min(mobility, 13)];
+
+        // Bad bishop detection - bishop blocked by own pawns on same color squares
+        bool isLightSquare = ((file_of(sq) + rank_of(sq)) % 2) == 1;
+        Bitboard sameColorSquares = isLightSquare ?
+            0x55AA55AA55AA55AAULL : 0xAA55AA55AA55AA55ULL;  // Light or dark squares
+        int blockedPawns = popcount(ourPawns & sameColorSquares);
+        // Penalize if many own pawns on same color as bishop
+        if (blockedPawns >= 4) {
+            score.mg -= (blockedPawns - 3) * 8;   // -8 to -40 for 4-8 pawns
+            score.eg -= (blockedPawns - 3) * 5;   // Less penalty in endgame
+        }
     }
     // Bishop pair bonus
     if (bishopCount >= 2) {
@@ -258,8 +310,15 @@ EvalScore eval_pieces(const Board& board, Color c) {
 
     // Rooks
     bb = board.pieces(c, ROOK);
+    Square rookSquares[2] = { SQ_NONE, SQ_NONE };
+    int rookCount = 0;
     while (bb) {
         Square sq = pop_lsb(bb);
+        if (rookCount < 2) {
+            rookSquares[rookCount] = sq;
+        }
+        rookCount++;
+
         File f = file_of(sq);
         Bitboard attacks = rook_attacks_bb(sq, occupied);
         int mobility = popcount(attacks & mobilityArea);
@@ -279,6 +338,19 @@ EvalScore eval_pieces(const Board& board, Color c) {
         Rank relativeRank = c == WHITE ? rank_of(sq) : Rank(RANK_8 - rank_of(sq));
         if (relativeRank == RANK_7) {
             score += RookOnSeventhBonus;
+        }
+    }
+
+    // Connected rooks bonus - rooks on same rank/file with no pieces between
+    if (rookCount >= 2 && rookSquares[0] != SQ_NONE && rookSquares[1] != SQ_NONE) {
+        if (file_of(rookSquares[0]) == file_of(rookSquares[1]) ||
+            rank_of(rookSquares[0]) == rank_of(rookSquares[1])) {
+            // Check if they can see each other
+            Bitboard between = between_bb(rookSquares[0], rookSquares[1]);
+            if (!(between & occupied)) {
+                score.mg += 15;  // Connected rooks bonus
+                score.eg += 10;
+            }
         }
     }
 
@@ -513,8 +585,11 @@ int evaluate(const Board& board, int alpha, int beta) {
     int eg = score.eg;
     int finalScore = (mg * phase + eg * (TotalPhase - phase)) / TotalPhase;
 
-    // Return from side to move's perspective
-    return board.side_to_move() == WHITE ? finalScore : -finalScore;
+    // Tempo bonus - small bonus for side to move (having the initiative)
+    constexpr int TEMPO = 15;  // About 0.15 pawn
+
+    // Return from side to move's perspective with tempo
+    return (board.side_to_move() == WHITE ? finalScore : -finalScore) + TEMPO;
 }
 
 // Overload without alpha/beta for compatibility (no lazy eval)
