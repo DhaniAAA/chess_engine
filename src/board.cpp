@@ -575,9 +575,12 @@ void Board::do_move(Move m, StateInfo& newSt) {
 
             // Check for double push
             if (std::abs(int(to) - int(from)) == 16) {
-                Square ep_sq = from + pawn_push(us);
+                Square ep_sq = Square((from + to) / 2);  // EP square is between from and to
 
                 // Only set en passant if there's an enemy pawn that can capture
+                // pawn_attacks_bb(us, ep_sq) returns squares from which 'us' pawns can attack ep_sq
+                // (i.e., the squares diagonal to ep_sq from 'us' perspective)
+                // We check if any 'them' pawns are on those squares
                 if (pawn_attacks_bb(us, ep_sq) & pieces(them, PAWN)) {
                     st->enPassant = ep_sq;
                     k ^= Zobrist::enpassant_key(file_of(ep_sq));

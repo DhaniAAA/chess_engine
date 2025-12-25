@@ -971,13 +971,31 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
 
         // Check extension (limited to MAX_EXTENSIONS total in path)
         if (givesCheck && currentExtensions < MAX_EXTENSIONS) {
-            extension = 1;
+            // Extend more if the check is discovered or with SEE >= 0
+            if (SEE::see_ge(board, m, 0)) {
+                extension = 1;
+            }
+        }
+
+        // In-check extension: when WE are in check, extend to find defensive resources
+        if (inCheck && currentExtensions < MAX_EXTENSIONS) {
+            extension = std::max(extension, 1);
         }
 
         // Passed pawn extension (for pawn moves to 7th rank)
         if (movedPt == PAWN && currentExtensions < MAX_EXTENSIONS) {
             Rank toRank = relative_rank(us, m.to());
             if (toRank == RANK_7) {
+                extension = std::max(extension, 1);
+            }
+        }
+
+        // Recapture extension: extend when recapturing on the same square
+        // This helps find important tactical sequences
+        if (isCapture && previousMove != MOVE_NONE &&
+            m.to() == previousMove.to() && currentExtensions < MAX_EXTENSIONS) {
+            // Only extend if the recapture is not obviously bad
+            if (SEE::see_ge(board, m, 0)) {
                 extension = std::max(extension, 1);
             }
         }
@@ -1415,10 +1433,17 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth) {
         }
 
         // Delta pruning (hanya untuk captures saat TIDAK dalam skak)
+        // Skip pruning for major piece captures to avoid missing sacrifices
         if (!inCheck && !m.is_promotion()) {
-            int captureValue = PieceValue[type_of(board.piece_on(m.to()))];
-            if (staticEval + captureValue + 200 < alpha) {
-                continue;  // Can't raise alpha
+            PieceType capturedPt = type_of(board.piece_on(m.to()));
+            int captureValue = PieceValue[capturedPt];
+
+            // Use larger margin (250) to be more conservative
+            // Don't prune if capturing queen or rook (could be important sacrifice)
+            if (capturedPt != QUEEN && capturedPt != ROOK) {
+                if (staticEval + captureValue + 250 < alpha) {
+                    continue;  // Can't raise alpha
+                }
             }
         }
 

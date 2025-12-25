@@ -103,19 +103,9 @@ int SEE::evaluate(const Board& board, Move m) {
         Square attacker_sq = lsb(attackers_bb);
         occupied ^= square_bb(attacker_sq);
 
-        // X-ray attacks: reveal hidden attackers through vacated square
-        // Diagonal x-rays (pawn, bishop, queen)
-        if (attacker == PAWN || attacker == BISHOP || attacker == QUEEN) {
-            Bitboard diag_xrays = bishop_attacks_bb(to, occupied) &
-                                  (board.pieces(BISHOP) | board.pieces(QUEEN));
-            // These are already considered by min_attacker due to updated occupancy
-        }
-        // Straight x-rays (rook, queen)
-        if (attacker == ROOK || attacker == QUEEN) {
-            Bitboard straight_xrays = rook_attacks_bb(to, occupied) &
-                                      (board.pieces(ROOK) | board.pieces(QUEEN));
-            // These are already considered by min_attacker due to updated occupancy
-        }
+        // Note: X-ray attacks are automatically revealed because min_attacker()
+        // uses the updated occupancy to find sliders that can now attack through
+        // the vacated square.
 
         side = ~side;
     }

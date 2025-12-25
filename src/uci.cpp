@@ -423,7 +423,7 @@ void UCIHandler::cmd_perft(std::istringstream& is) {
     int depth = 6;
     is >> depth;
 
-    // Simple perft implementation
+    // Perft implementation
     std::function<U64(Board&, int)> perft = [&](Board& b, int d) -> U64 {
         if (d == 0) return 1;
 
