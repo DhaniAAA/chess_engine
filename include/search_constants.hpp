@@ -18,8 +18,8 @@ constexpr int SCORE_FLUCTUATION_THRESHOLD = 50;  // Centipawns change to trigger
 // ============================================================================
 
 // Futility pruning margins per depth
-// [PERBAIKAN] Increased margins for less aggressive pruning
-constexpr int FutilityMargin[7] = { 0, 200, 400, 600, 800, 1000, 1200 };
+// Conservative margins to preserve tactical accuracy
+constexpr int FutilityMargin[7] = { 0, 150, 300, 450, 600, 750, 900 };
 
 // Razoring margins per depth
 constexpr int RazorMargin[4] = { 0, 300, 500, 700 };
@@ -28,8 +28,8 @@ constexpr int RazorMargin[4] = { 0, 300, 500, 700 };
 constexpr int RFPMargin[7] = { 0, 100, 200, 300, 400, 500, 600 };
 
 // Late move pruning thresholds (skip quiet moves after this many tries at low depth)
-// [PERBAIKAN] More generous thresholds to search more moves before pruning
-constexpr int LMPThreshold[8] = { 0, 6, 10, 16, 24, 34, 46, 60 };
+// Balanced thresholds for good pruning without missing tactics
+constexpr int LMPThreshold[8] = { 0, 5, 8, 12, 18, 26, 36, 48 };
 
 // Maximum depth for specific pruning techniques
 constexpr int FUTILITY_MAX_DEPTH = 6;
@@ -54,8 +54,8 @@ constexpr int COUNTER_HIST_PRUNING_MARGIN = 4000; // Threshold for pruning (nega
 
 // Follow-up History Pruning
 // Prune moves based on 4-ply continuation history pattern
-constexpr int FOLLOWUP_HIST_PRUNING_DEPTH = 3;   // Max depth for follow-up history pruning
-constexpr int FOLLOWUP_HIST_PRUNING_MARGIN = 5000; // Threshold for pruning
+constexpr int FOLLOWUP_HIST_PRUNING_DEPTH = 2;   // Max depth for follow-up history pruning (conservative)
+constexpr int FOLLOWUP_HIST_PRUNING_MARGIN = 6000; // Threshold for pruning
 
 // ============================================================================
 // Extension Parameters
@@ -125,8 +125,9 @@ constexpr int DELTA_PRUNING_MARGIN = 200;    // Delta pruning margin
 // LMR Tuning Parameters
 // ============================================================================
 
-constexpr double LMR_BASE = 0.50;            // Base reduction factor (more conservative)
-constexpr double LMR_DIVISOR = 2.40;         // Divisor for log formula (closer to Stockfish)
+// LMR Tuning Parameters (closer to Stockfish defaults for proven performance)
+constexpr double LMR_BASE = 0.75;            // Base reduction factor
+constexpr double LMR_DIVISOR = 2.25;         // Divisor for log formula
 
 // ============================================================================
 // Extension Control Parameters
@@ -144,10 +145,11 @@ constexpr int NEG_EXT_MIN_DEPTH = 6;         // Minimum depth for negative exten
 // Dynamic SEE Thresholds
 // ============================================================================
 
-constexpr int SEE_CAPTURE_IMPROVING_FACTOR = 20;    // More lenient when improving
-constexpr int SEE_CAPTURE_NOT_IMPROVING_FACTOR = 40; // Stricter when not improving
-constexpr int SEE_QUIET_IMPROVING_FACTOR = 40;       // Quiet SEE when improving
-constexpr int SEE_QUIET_NOT_IMPROVING_FACTOR = 70;   // Quiet SEE when not improving
+// Dynamic SEE Thresholds - balanced for speed+accuracy
+constexpr int SEE_CAPTURE_IMPROVING_FACTOR = 15;    // More lenient when improving
+constexpr int SEE_CAPTURE_NOT_IMPROVING_FACTOR = 30; // Stricter when not improving
+constexpr int SEE_QUIET_IMPROVING_FACTOR = 35;       // Quiet SEE when improving
+constexpr int SEE_QUIET_NOT_IMPROVING_FACTOR = 60;   // Quiet SEE when not improving
 
 // ============================================================================
 // History Pruning Enhancement

@@ -234,9 +234,20 @@ void MovePicker::score_captures() {
                 if (captured != NO_PIECE) {
                     sm.score += PieceValue[type_of(captured)];
                 }
+            } else if (promo == ROOK) {
+                // Rook promotion: rare but can avoid stalemate
+                sm.score = SCORE_ROOK_PROMO;
+                Piece captured = board.piece_on(m.to());
+                if (captured != NO_PIECE) {
+                    sm.score += PieceValue[type_of(captured)];
+                }
             } else {
-                // Rook/Bishop underpromotion: almost never useful
-                sm.score = SCORE_UNDERPROM;
+                // Bishop promotion: very rare
+                sm.score = SCORE_BISHOP_PROMO;
+                Piece captured = board.piece_on(m.to());
+                if (captured != NO_PIECE) {
+                    sm.score += PieceValue[type_of(captured)];
+                }
             }
             continue;
         }
@@ -311,9 +322,12 @@ void MovePicker::score_quiets() {
                 sm.score += SCORE_QUEEN_PROMO;
             } else if (promo == KNIGHT) {
                 sm.score += SCORE_KNIGHT_PROMO;
+            } else if (promo == ROOK) {
+                // Rook underpromotion: rare but can avoid stalemate
+                sm.score += SCORE_ROOK_PROMO;
             } else {
-                // Rook/Bishop underpromotion: search last
-                sm.score = SCORE_UNDERPROM;
+                // Bishop underpromotion: very rare
+                sm.score += SCORE_BISHOP_PROMO;
             }
         }
     }

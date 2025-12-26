@@ -74,7 +74,7 @@ int get_contempt(const Board& board) {
 // Search Constructor
 // ============================================================================
 
-Search::Search() : stopped(false), searching(false), rootBestMove(MOVE_NONE),
+Search::Search() : stopped(false), searching(false), isPondering(false), rootBestMove(MOVE_NONE),
                    rootPonderMove(MOVE_NONE), previousRootBestMove(MOVE_NONE), previousRootScore(VALUE_NONE),
                    rootDepth(0), rootPly(0), pvIdx(0),
                    optimumTime(0), maximumTime(0), previousMove(MOVE_NONE) {
@@ -154,6 +154,28 @@ void Search::start(Board& board, const SearchLimits& lim) {
     iterative_deepening(board);
 
     searching = false;
+    isPondering = false;
+}
+
+// ============================================================================
+// Ponderhit - Transition from ponder to normal search
+// ============================================================================
+
+void Search::on_ponderhit() {
+    // Transition from ponder mode to normal search
+    // This is called when the opponent plays the move we predicted
+
+    // 1. Disable ponder mode
+    isPondering = false;
+    limits.ponder = false;
+
+    // 2. Reset time management with actual time
+    // The time limits were already set by the GUI, we just need to
+    // reset the start time so we can track actual search time
+    startTime = std::chrono::steady_clock::now();
+
+    // Note: We do NOT reset the search - it continues from the current depth
+    // This is the key benefit of pondering - we get to keep the work done
 }
 
 // ============================================================================
@@ -225,7 +247,8 @@ void Search::init_time_management(Color us) {
 void Search::check_time() {
     if (stopped) return;
 
-    if (limits.infinite || limits.ponder) return;
+    // In ponder mode or infinite analysis, don't check time
+    if (limits.infinite || limits.ponder || isPondering) return;
 
     auto now = std::chrono::steady_clock::now();
     int elapsed = static_cast<int>(
@@ -630,9 +653,10 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     SearchStack* ss = &stack[ply + 2];
 
     // Quiescence search at depth 0
-    // [PERBAIKAN] Start qsearch with depth 4 for deeper tactical analysis
+    // Start qsearch with depth 0 (standard) - higher values hurt NPS significantly
+    // Tactical depth is achieved through proper qsearch extensions for checks
     if (depth <= 0) {
-        return qsearch(board, alpha, beta, 4);
+        return qsearch(board, alpha, beta, 0);
     }
 
     ++searchStats.nodes;
@@ -775,10 +799,9 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     if (!pvNode && !inCheck && depth <= 6 && depth >= 1) {
         int rfpMargin = RFPMargin[depth];
 
-        // Stricter margin if not improving (prune less)
-        // Correction: Improving -> Prune less (Increase margin)
-        // Not Improving -> Prune more (Standard margin)
-        if (improving) rfpMargin += 50;
+        // When NOT improving, we can prune more aggressively (increase margin)
+        // When improving, be more conservative (standard margin)
+        if (!improving) rfpMargin += 50;
 
         if (correctedStaticEval - rfpMargin >= beta && correctedStaticEval < VALUE_MATE_IN_MAX_PLY) {
             return correctedStaticEval;
@@ -836,18 +859,17 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     }
 
     // Multi-Cut Pruning
-    if (!pvNode && !inCheck && depth >= MULTI_CUT_DEPTH && cutNode) {
+    // Use MovePicker with TT move for proper ordering - first moves are most likely to cutoff
+    if (!pvNode && !inCheck && depth >= MULTI_CUT_DEPTH && cutNode && ttMove != MOVE_NONE) {
         int multiCutCount = 0;
         int movesTried = 0;
 
-        // Generate and score moves for multi-cut check
-        MoveList mcMoves;
-        MoveGen::generate_all(board, mcMoves);
+        // Use MovePicker for ordered moves (TT move first, then good captures, etc.)
+        MovePicker mcPicker(board, ttMoves, ttMoveCount, ply, killers, counterMoves, history, previousMove,
+                            nullptr, nullptr, &captureHist);
+        Move m;
 
-        // Try the first few moves with a shallow search
-        for (size_t i = 0; i < mcMoves.size() && movesTried < MULTI_CUT_COUNT + 2; ++i) {
-            Move m = mcMoves[i].move;
-
+        while ((m = mcPicker.next_move()) != MOVE_NONE && movesTried < MULTI_CUT_COUNT + 2) {
             if (!MoveGen::is_legal(board, m)) {
                 continue;
             }
@@ -933,13 +955,15 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     }
 
     // Internal Iterative Reductions (IIR) - Replaces IID
+    // Use separate variable to not corrupt depth for TT store and extensions
+    int searchDepth = depth;
     if (!ttMove && depth >= IIR_MIN_DEPTH) {
         if (pvNode) {
-            depth -= IIR_PV_REDUCTION;
+            searchDepth -= IIR_PV_REDUCTION;
         } else if (cutNode) {
-            depth -= IIR_CUT_REDUCTION;
+            searchDepth -= IIR_CUT_REDUCTION;
         } else {
-            depth -= IIR_REDUCTION;
+            searchDepth -= IIR_REDUCTION;
         }
     }
 
@@ -949,6 +973,13 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     int moveCount = 0;
     Move quietsSearched[64];
     int quietCount = 0;
+
+    // Track captures searched for failed-move penalty
+    Move capturesSearched[32];
+    Piece capturePieces[32];      // The piece that moved for each capture
+    PieceType capturedTypes[32];  // The captured piece type for each capture
+    int captureSEE[32];           // SEE value for each capture (for penalty scaling)
+    int captureCount = 0;
 
     // Track singularity for best move check
     bool singularSearched = false;
@@ -1327,7 +1358,7 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             extension = 0;
         }
 
-        int newDepth = depth - 1 + extension;
+        int newDepth = searchDepth - 1 + extension;
 
         if (ss->ply >= 0 && ss->ply < MAX_PLY) {
             stack[ply + 2].extensions = currentExtensions + extension;
@@ -1467,6 +1498,18 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             quietsSearched[quietCount++] = m;
         }
 
+        // Track captures for failed-move penalty (capture history update)
+        if (isCapture && captureCount < 32) {
+            capturesSearched[captureCount] = m;
+            capturePieces[captureCount] = movedPiece;
+            Piece captured = board.piece_on(m.to());
+            capturedTypes[captureCount] = (captured != NO_PIECE) ? type_of(captured) :
+                                          (m.is_enpassant() ? PAWN : NO_PIECE_TYPE);
+            // Calculate SEE for penalty scaling (bad captures get stronger penalty)
+            captureSEE[captureCount] = SEE::evaluate(board, m);
+            captureCount++;
+        }
+
         // Update best score
         if (score > bestScore) {
             bestScore = score;
@@ -1492,7 +1535,11 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                 }
 
                 if (score >= beta) {
-                    // Beta cutoff
+                    // =========================================================
+                    // BETA CUTOFF - Big bonus for the winning move
+                    // =========================================================
+
+                    int bonus = depth * depth;
 
                     // Update killer moves (only for quiet moves)
                     if (!isCapture) {
@@ -1503,30 +1550,28 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                             counterMoves.store(board.piece_on(m.from()), m.to(), m);
                         }
 
-                        // Update history
+                        // Update history with big bonus for cutoff move
                         history.update_quiet_stats(board.side_to_move(), m,
                                                    quietsSearched, quietCount - 1, depth);
 
-                        // Update continuation history
-                        int bonus = depth * depth;
+                        // Update continuation history with bonus
                         PieceType pt = type_of(movedPiece);
-
-                        // Update 1-ply ago continuation history
                         if (contHist1ply) {
                             const_cast<ContinuationHistoryEntry*>(contHist1ply)->update(pt, m.to(), bonus);
                         }
-
-                        // Update 2-ply ago continuation history
                         if (contHist2ply) {
                             const_cast<ContinuationHistoryEntry*>(contHist2ply)->update(pt, m.to(), bonus);
                         }
 
-                        // Penalty for other quiet moves that were tried
+                        // Penalty for other quiet moves that were tried (failed to cutoff)
                         for (int i = 0; i < quietCount - 1; ++i) {
                             if (quietsSearched[i] != m) {
                                 Piece qpc = board.piece_on(quietsSearched[i].from());
                                 PieceType qpt = type_of(qpc);
                                 Square qto = quietsSearched[i].to();
+
+                                // Penalty in butterfly history
+                                history.update(board.side_to_move(), quietsSearched[i], depth, false);
 
                                 if (contHist1ply) {
                                     const_cast<ContinuationHistoryEntry*>(contHist1ply)->update(qpt, qto, -bonus);
@@ -1537,19 +1582,109 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
                             }
                         }
                     } else {
-                        // Update capture history using CaptureHistory class
+                        // Capture caused cutoff - big bonus
                         Piece captured = board.piece_on(m.to());
-                        if (captured != NO_PIECE) {
-                             PieceType capturedPt = type_of(captured);
-                             // Use update_capture_stats with gravity decay
-                             captureHist.update_capture_stats(movedPiece, m.to(), capturedPt, depth, true);
+                        PieceType capturedPt = (captured != NO_PIECE) ? type_of(captured) :
+                                               (m.is_enpassant() ? PAWN : NO_PIECE_TYPE);
+                        if (capturedPt != NO_PIECE_TYPE) {
+                            captureHist.update_capture_stats(movedPiece, m.to(), capturedPt, depth, true);
+                        }
+                    }
+
+                    // Penalty for ALL captures that were tried but failed to cutoff
+                    // SEE-negative captures get stronger penalty
+                    for (int i = 0; i < captureCount; ++i) {
+                        if (capturesSearched[i] != m && capturedTypes[i] != NO_PIECE_TYPE) {
+                            // Base penalty
+                            int penaltyDepth = depth;
+
+                            // SEE-negative captures get double penalty (they were bad ideas)
+                            if (captureSEE[i] < 0) {
+                                penaltyDepth = depth * 2;
+                            }
+
+                            // Apply penalty to failed captures
+                            captureHist.update_capture_stats(capturePieces[i],
+                                                             capturesSearched[i].to(),
+                                                             capturedTypes[i],
+                                                             penaltyDepth, false);
                         }
                     }
 
                     break;  // Fail high
                 }
 
+                // =========================================================
+                // IMPROVED ALPHA but no cutoff - Small bonus
+                // =========================================================
+                {
+                    int smallBonus = depth;  // Smaller bonus for raising alpha
+
+                    if (!isCapture) {
+                        // Small bonus in continuation history for improving alpha
+                        PieceType pt = type_of(movedPiece);
+                        if (contHist1ply) {
+                            const_cast<ContinuationHistoryEntry*>(contHist1ply)->update(pt, m.to(), smallBonus);
+                        }
+                        if (contHist2ply) {
+                            const_cast<ContinuationHistoryEntry*>(contHist2ply)->update(pt, m.to(), smallBonus / 2);
+                        }
+                    }
+                }
+
                 alpha = score;
+            }
+        }
+    }
+
+    // =========================================================
+    // END OF MOVE LOOP - Penalty for moves that failed to raise alpha
+    // (Only applies if we didn't cutoff and have a best move)
+    // =========================================================
+    if (bestMove != MOVE_NONE && bestScore > -VALUE_INFINITE) {
+        int penalty = depth;  // Medium penalty for failed moves
+
+        bool bestIsCapture = !board.empty(bestMove.to()) || bestMove.is_enpassant();
+
+        // If best move is quiet, penalize quiets that were tried but didn't improve alpha
+        // The best move already got its bonus (either at cutoff or when it improved alpha)
+        if (!bestIsCapture) {
+
+            for (int i = 0; i < quietCount; ++i) {
+                // Skip the best move itself
+                if (quietsSearched[i] == bestMove) continue;
+
+                Piece qpc = board.piece_on(quietsSearched[i].from());
+                PieceType qpt = type_of(qpc);
+                Square qto = quietsSearched[i].to();
+
+                // Only apply penalty if this move didn't raise alpha at all
+                // (Moves that raised alpha already got small bonus above)
+                if (contHist1ply) {
+                    const_cast<ContinuationHistoryEntry*>(contHist1ply)->update(qpt, qto, -penalty);
+                }
+                if (contHist2ply) {
+                    const_cast<ContinuationHistoryEntry*>(contHist2ply)->update(qpt, qto, -penalty / 2);
+                }
+            }
+        }
+
+        // Penalize captures that were searched but didn't become best
+        // SEE-negative captures get stronger penalty
+        for (int i = 0; i < captureCount; ++i) {
+            if (capturesSearched[i] != bestMove && capturedTypes[i] != NO_PIECE_TYPE) {
+                // Base penalty (smaller than cutoff penalty)
+                int penaltyDepth = depth / 2;
+
+                // SEE-negative captures get double penalty
+                if (captureSEE[i] < 0) {
+                    penaltyDepth = depth;  // Full penalty for bad captures
+                }
+
+                captureHist.update_capture_stats(capturePieces[i],
+                                                 capturesSearched[i].to(),
+                                                 capturedTypes[i],
+                                                 penaltyDepth, false);
             }
         }
     }
@@ -1575,15 +1710,26 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
     // Update Correction History
     // When we have a reliable search result (exact bound or fail high/low),
     // update the correction history to improve future static eval accuracy
-    if (!inCheck && staticEval != VALUE_NONE && depth >= 3) {
+    // Guards:
+    // 1. Not in check (static eval unreliable in check)
+    // 2. Static eval was computed (not VALUE_NONE)
+    // 3. Depth >= 3 (shallow searches are noisy)
+    // 4. Best score is NOT a mate score (mate is tactical, not eval error)
+    // 5. Bound is reliable (EXACT, or fail high/low with moves tried)
+    if (!inCheck && staticEval != VALUE_NONE && depth >= 3 &&
+        std::abs(bestScore) < VALUE_MATE_IN_MAX_PLY) {
+
         // Calculate the difference between search result and static eval
         // Positive diff means eval was too pessimistic, negative means too optimistic
         int diff = bestScore - staticEval;
 
-        // Only update on reliable results (not when we failed low with no moves tried)
+        // Clamp diff to prevent extreme corrections (max 500cp adjustment)
+        diff = std::clamp(diff, -500, 500);
+
+        // Only update on reliable results (EXACT or fail-high)
+        // BOUND_UPPER (fail-low) is not reliable for correction
         if (bound == BOUND_EXACT ||
-            (bound == BOUND_LOWER && bestScore >= beta) ||
-            (bound == BOUND_UPPER && moveCount > 0)) {
+            (bound == BOUND_LOWER && bestScore >= beta)) {
             corrHistory.update(us, board.pawn_key(), diff, depth);
         }
     }
@@ -1701,29 +1847,25 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth, Square recap
             captureValue = PieceValue[PAWN];
         }
 
+        // Delta pruning: skip captures that can't possibly raise alpha
+        // Only for non-check and non-promotion
         if (!inCheck && !m.is_promotion()) {
-            // Never prune captures of valuable pieces (Queen, Rook, or any piece worth >= pawn)
-            // This ensures we don't miss free material
-            if (capturedPt != QUEEN && capturedPt != ROOK && capturedPt != KNIGHT && capturedPt != BISHOP) {
-                // Use very large margin (500) to be conservative
-                // Only prune if we're way below alpha and the capture can't possibly help
-                if (staticEval + captureValue + 500 < alpha) {
+            // Conservative delta margin from search_constants.hpp (200cp)
+            // Never prune captures of major pieces (Queen, Rook)
+            if (capturedPt != QUEEN && capturedPt != ROOK) {
+                if (staticEval + captureValue + DELTA_PRUNING_MARGIN < alpha) {
                     continue;  // Can't raise alpha
                 }
             }
         }
 
-        // SEE pruning (hanya saat TIDAK dalam skak)
-        // [PERBAIKAN] JANGAN PERNAH prune capture Queen - pengorbanan ratu sering kunci taktik
-        bool seeWinning = (captureValue >= PieceValue[PAWN]);
-        int seeThreshold = seeWinning ? -200 : -100;
-
-        // Skip SEE pruning untuk:
-        // 1. Saat dalam skak (semua evasion harus dicek)
-        // 2. Capture yang menguntungkan (seeWinning)
-        // 3. Capture Queen (pengorbanan ratu sering kunci taktik)
-        if (!inCheck && !seeWinning && capturedPt != QUEEN && !SEE::see_ge(board, m, seeThreshold)) {
-            continue;  // Losing capture - but only if not capturing real material or queen
+        // SEE pruning for losing captures
+        // Skip if: in check, capturing Queen, or SEE is winning
+        if (!inCheck && capturedPt != QUEEN) {
+            // Use -1 threshold: must at least break even
+            if (!SEE::see_ge(board, m, -1)) {
+                continue;
+            }
         }
 
         // Make move

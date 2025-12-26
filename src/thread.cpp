@@ -185,6 +185,20 @@ void ThreadPool::stop() {
     stop_flag = true;
 }
 
+void ThreadPool::on_ponderhit() {
+    // Transition from ponder mode to normal search
+    // Called when opponent plays the predicted move
+
+    // 1. Disable ponder mode
+    limits.ponder = false;
+
+    // 2. Reset start time for time management
+    startTime = std::chrono::steady_clock::now();
+
+    // Note: We do NOT stop the search, it continues from the current depth
+    // The time checking in should_stop will now start working since limits.ponder is false
+}
+
 void ThreadPool::wait_for_search_finished() {
     for (auto& thread : threads) {
         thread->wait_for_search_finished();
@@ -590,11 +604,24 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
     }
 
     // IID
+    // Use separate variable to not corrupt depth for TT store and extensions
+    int searchDepth = depth;
     if (!ttMove && depth >= 6 && (pvNode || cutNode)) {
         alpha_beta(thread, board, alpha, beta, depth - 2, cutNode, ply);
         tte = TT.probe(board.key(), ttHit);
         // ttMoves update logic skipped for IID simplicity, usually ttMove is enough
         ttMove = ttHit ? tte->move() : MOVE_NONE; // Re-probe single move for IID
+    }
+
+    // Internal Iterative Reductions (IIR)
+    if (!ttMove && depth >= IIR_MIN_DEPTH) {
+        if (pvNode) {
+            searchDepth -= IIR_PV_REDUCTION;
+        } else if (cutNode) {
+            searchDepth -= IIR_CUT_REDUCTION;
+        } else {
+            searchDepth -= IIR_REDUCTION;
+        }
     }
 
     // Move loop
@@ -640,19 +667,24 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
         // [GUARD] Safe stack access with bounds checking
         int currentExt = (ply >= 2 && ply + 1 < MAX_PLY + 4) ? thread->stack[ply + 1].extensions : 0;
 
-        // [PERBAIKAN] Safe checks (SEE >= 0) SELALU dipanjangkan untuk menemukan mat paksa
+        // Check extension - safe checks (SEE >= 0) ALWAYS extend
         if (givesCheck && currentExt < MAX_EXTENSIONS && SEE::see_ge(board, m, 0)) {
-            extension = 1;  // WAJIB extend untuk safe checks
+            extension = 1;
         }
 
-        int newDepth = depth - 1 + extension;
+        // In-check extension: when WE are in check, extend to find defensive resources
+        if (inCheck && currentExt < MAX_EXTENSIONS) {
+            extension = std::max(extension, 1);
+        }
+
+        int newDepth = searchDepth - 1 + extension;
         // [GUARD] Safe stack write with bounds checking
         if (ply + 2 < MAX_PLY + 4) {
             thread->stack[ply + 2].extensions = currentExt + extension;
         }
 
         // LMR
-        // [PERBAIKAN] Langkah yang memberikan skak TIDAK BOLEH direduksi sama sekali
+        // Moves that give check MUST NOT be reduced
         int reduction = 0;
         if (depth >= 3 && moveCount > 1 && !isCapture && !isPromotion && !givesCheck) {
             reduction = LMRTable[std::min(depth, 63)][std::min(moveCount, 63)];

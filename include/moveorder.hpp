@@ -6,21 +6,23 @@
 #include "tt.hpp"
 
 // ============================================================================
-// Move Ordering Scores
+// Move Ordering Scores (using int64_t for large range safety)
 // Higher scores = searched first
 // ============================================================================
 
-constexpr int SCORE_TT_MOVE      = 10000000;  // Hash move from TT
-constexpr int SCORE_WINNING_CAP  = 8000000;   // Winning capture (SEE > 0)
-constexpr int SCORE_QUEEN_PROMO  = 7500000;   // Queen promotion (highest priority)
-constexpr int SCORE_PROMOTION    = 7000000;   // Capture + promotion
-constexpr int SCORE_EQUAL_CAP    = 6000000;   // Equal capture (SEE == 0)
-constexpr int SCORE_KILLER_1     = 5000000;   // First killer move
-constexpr int SCORE_KILLER_2     = 4000000;   // Second killer move
-constexpr int SCORE_COUNTER      = 3000000;   // Counter move
-constexpr int SCORE_KNIGHT_PROMO = 1000000;   // Knight promotion (can be tactical)
-constexpr int SCORE_LOSING_CAP   = 0;         // Losing capture (SEE < 0), sorted after quiets
-constexpr int SCORE_UNDERPROM    = -5000000;  // Underpromotion (Rook/Bishop) - last
+// BASE OFFSET untuk memastikan kategori tidak tumpang tindih
+constexpr int64_t SCORE_TT_MOVE        = 4000000000LL;   // Harus SELALU tertinggi
+constexpr int64_t SCORE_QUEEN_PROMO    = 3000000000LL;   // Promosi Ratu sangat krusial
+constexpr int64_t SCORE_KNIGHT_PROMO   = 2900000000LL;   // Promosi Kuda (taktis)
+constexpr int64_t SCORE_ROOK_PROMO     = 2800000000LL;   // Promosi Benteng
+constexpr int64_t SCORE_BISHOP_PROMO   = 2700000000LL;   // Promosi Gajah
+constexpr int64_t SCORE_WINNING_CAP    = 2000000000LL;   // Winning capture (Base value + MVV/LVA nanti)
+constexpr int64_t SCORE_EQUAL_CAP      = 1900000000LL;   // Equal capture
+constexpr int64_t SCORE_KILLER_1       = 100000000LL;    // Killer move 1
+constexpr int64_t SCORE_KILLER_2       = 90000000LL;     // Killer move 2
+constexpr int64_t SCORE_COUNTER        = 80000000LL;     // Counter move
+constexpr int64_t SCORE_HISTORY_MAX    = 70000000LL;     // Batas atas History Heuristic (biasanya dinamis)
+constexpr int64_t SCORE_LOSING_CAP     = -100000000LL;   // Losing capture (dicari terakhir)
 
 // ============================================================================
 // Piece Values for MVV-LVA and SEE

@@ -160,6 +160,7 @@ public:
     // Start/stop searching on all threads
     void start_thinking(Board& board, const SearchLimits& limits);
     void stop();
+    void on_ponderhit();  // Transition from ponder to normal search
     void wait_for_search_finished();
 
     // Check if any thread is still searching

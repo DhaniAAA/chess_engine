@@ -80,6 +80,8 @@ void UCIHandler::loop() {
                 cmd_d();
             } else if (token == "eval") {
                 cmd_eval();
+            } else if (token == "ponderhit") {
+                cmd_ponderhit();
             }
         }
     } catch (const std::exception& e) {
@@ -261,10 +263,19 @@ void UCIHandler::cmd_go(std::istringstream& is) {
 
 void UCIHandler::start_search(const SearchLimits& limits) {
     searching = true;
+    isPondering = limits.ponder;
 
     // Save the FEN before search starts - this is a safe string copy
     // that doesn't have StateInfo pointer issues
     std::string searchFen = board.fen();
+
+    // Set ponder mode in searcher
+    Searcher.set_pondering(limits.ponder);
+
+    // Track ponder attempt if pondering is enabled
+    if (limits.ponder) {
+        options.ponderAttempts++;
+    }
 
     // Start search in separate thread
     searchThread = std::thread([this, limits, searchFen]() {
@@ -337,8 +348,9 @@ void UCIHandler::start_search(const SearchLimits& limits) {
         std::cout << "bestmove " << move_to_string(bestMove);
 
         // Output ponder move if available and valid
+        // [PERBAIKAN] Ponder move harus dari PV yang sama dengan bestmove
         Move ponderMove = Searcher.ponder_move();
-        if (ponderMove != MOVE_NONE && bestMove != MOVE_NONE) {
+        if (ponderMove != MOVE_NONE && bestMove != MOVE_NONE && options.ponder) {
             // Final validation: make best move and check if ponder is legal
             StateInfo si;
             validationBoard.do_move(bestMove, si);
@@ -346,11 +358,25 @@ void UCIHandler::start_search(const SearchLimits& limits) {
             if (MoveGen::is_pseudo_legal(validationBoard, ponderMove) &&
                 MoveGen::is_legal(validationBoard, ponderMove)) {
                 std::cout << " ponder " << move_to_string(ponderMove);
+
+                // Store ponder state for ponderhit verification
+                expectedPonderMove = ponderMove;
+                ponderFen = validationBoard.fen();
+                options.lastPonderMove = ponderMove;
+            } else {
+                expectedPonderMove = MOVE_NONE;
+                ponderFen = "";
             }
+        } else {
+            expectedPonderMove = MOVE_NONE;
+            ponderFen = "";
         }
+
         std::cout << std::endl;
         std::cout.flush();  // Force flush bestmove
 
+        isPondering = false;
+        Searcher.set_pondering(false);
         searching = false;
     });
 }
@@ -363,8 +389,31 @@ void UCIHandler::wait_for_search() {
 }
 
 void UCIHandler::cmd_stop() {
+    isPondering = false;
+    Searcher.set_pondering(false);
     Searcher.stop();
     wait_for_search();
+}
+
+void UCIHandler::cmd_ponderhit() {
+    // Called when opponent played the move we were pondering on
+    // Transition from ponder mode to normal search
+
+    if (isPondering && Searcher.is_pondering()) {
+        // Record ponder hit for statistics
+        options.ponderHits++;
+
+        // Log ponder hit (optional debug info)
+        // std::cout << "info string Ponder hit! Rate: "
+        //           << (options.ponderHits * 100 / options.ponderAttempts) << "%" << std::endl;
+
+        // Transition to normal search - this will:
+        // 1. Disable ponder mode (time checking becomes active)
+        // 2. Reset time management with actual time
+        // 3. Continue searching from current depth (NOT restart!)
+        Searcher.on_ponderhit();
+        isPondering = false;
+    }
 }
 
 void UCIHandler::cmd_quit() {

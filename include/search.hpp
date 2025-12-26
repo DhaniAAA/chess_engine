@@ -241,6 +241,15 @@ public:
     // Stop the search
     void stop() { stopped = true; }
 
+    // Transition from ponder mode to normal search (on ponderhit)
+    void on_ponderhit();
+
+    // Check if in ponder mode
+    bool is_pondering() const { return isPondering; }
+
+    // Set ponder mode
+    void set_pondering(bool p) { isPondering = p; }
+
     // Check if search is running
     bool is_searching() const { return searching; }
 
@@ -298,6 +307,7 @@ private:
     // Search state
     std::atomic<bool> stopped;
     std::atomic<bool> searching;
+    std::atomic<bool> isPondering;  // Currently in ponder mode
     SearchLimits limits;
     SearchStats searchStats;
 

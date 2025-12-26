@@ -70,6 +70,11 @@ private:
     std::thread searchThread;
     std::atomic<bool> searching;
 
+    // Ponder state
+    std::string ponderFen;        // FEN after best move (where ponder move starts)
+    Move expectedPonderMove;      // The ponder move we outputted
+    bool isPondering = false;     // Currently in ponder mode
+
     // Command handlers
     void cmd_uci();
     void cmd_isready();
@@ -77,6 +82,7 @@ private:
     void cmd_position(std::istringstream& is);
     void cmd_go(std::istringstream& is);
     void cmd_stop();
+    void cmd_ponderhit();         // Handle ponderhit command
     void cmd_quit();
     void cmd_setoption(std::istringstream& is);
     void cmd_perft(std::istringstream& is);

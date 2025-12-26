@@ -732,19 +732,47 @@ bool Board::is_draw(int ply) const {
         }
     }
 
-    // Insufficient material (K vs K, KN vs K, KB vs K, etc.)
-    // Simple check: if no pawns and total material is very low
+    // Insufficient material detection
+    // Must be VERY precise - KBN vs K is NOT a draw (forced mate exists)
     int totalPieces = popcount(pieces());
-    if (totalPieces <= 3) {
-        // K vs K
-        if (totalPieces == 2) {
+
+    // K vs K - obvious draw
+    if (totalPieces == 2) {
+        return true;
+    }
+
+    // 3 pieces total: only KN vs K or KB vs K are draws
+    if (totalPieces == 3) {
+        // Must have exactly 1 minor piece total (not per side)
+        int knights = popcount(pieces(KNIGHT));
+        int bishops = popcount(pieces(BISHOP));
+
+        // KN vs K or KB vs K (one minor piece total)
+        if (knights + bishops == 1) {
+            return true;
+        }
+    }
+
+    // 4 pieces: potential draws
+    if (totalPieces == 4) {
+        // KN vs KN - draw
+        if (popcount(pieces(KNIGHT)) == 2 && popcount(pieces(BISHOP)) == 0) {
             return true;
         }
 
-        // KN vs K or KB vs K
-        if (totalPieces == 3) {
-            if (pieces(KNIGHT) || pieces(BISHOP)) {
-                return true;
+        // KB vs KB same color squares - draw
+        if (popcount(pieces(BISHOP)) == 2 && popcount(pieces(KNIGHT)) == 0) {
+            Bitboard whiteBishops = pieces(WHITE, BISHOP);
+            Bitboard blackBishops = pieces(BLACK, BISHOP);
+            if (popcount(whiteBishops) == 1 && popcount(blackBishops) == 1) {
+                Square wbSq = lsb(whiteBishops);
+                Square bbSq = lsb(blackBishops);
+                // Same color if sum of file+rank has same parity
+                bool wbLight = ((file_of(wbSq) + rank_of(wbSq)) % 2) == 1;
+                bool bbLight = ((file_of(bbSq) + rank_of(bbSq)) % 2) == 1;
+                if (wbLight == bbLight) {
+                    return true;  // Same color bishops - draw
+                }
             }
         }
     }
