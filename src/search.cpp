@@ -586,7 +586,11 @@ void Search::iterative_deepening(Board& board) {
                         } else {
                             // Untuk mate score, hanya stop jika sudah mate in 1-2
                             // dan stable, untuk memastikan tidak ada miss
-                            int mateIn = std::abs(VALUE_MATE - std::abs(score));
+                            // Calculate mate distance in moves (not ply)
+                            // Matches UCI reporting formula
+                            int mateIn = (score > 0) ?
+                                (VALUE_MATE - score + 1) / 2 :
+                                std::abs((VALUE_MATE + score) / 2);
                             if (mateIn <= 4 && bestMoveStability >= 3 && elapsed > optimumTime * 0.8) {
                                 break;  // Mate in 1-2 moves is definitive
                             }
@@ -815,6 +819,9 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
 
     bool doubleNullMove = (ply >= 1 && ply + 1 < MAX_PLY + 4 && stack[ply + 1].nullMovePruned);
 
+    // Mate Threat Detection - set to true if null move shows opponent can mate us
+    bool mateThreat = false;
+
     // Null move pruning
     if (!pvNode && !inCheck && correctedStaticEval >= beta && depth >= 3 &&
         hasNonPawnMaterial && !doubleNullMove) {
@@ -855,6 +862,12 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             } else {
                 return nullScore;
             }
+        }
+        // MATE THREAT EXTENSION DETECTION
+        // If null move shows we are getting mated (opponent has unstoppable mate threat),
+        // set flag to extend search for defensive moves
+        else if (depth >= MATE_THREAT_EXT_MIN_DEPTH && nullScore <= VALUE_MATED_IN_MAX_PLY) {
+            mateThreat = true;
         }
     }
 
@@ -1255,6 +1268,32 @@ int Search::search(Board& board, int alpha, int beta, int depth, bool cutNode) {
             if (toRank == RANK_7) {
                 extension = std::max(extension, 1);
             }
+        }
+
+        // =====================================================================
+        // MATE THREAT EXTENSION
+        // =====================================================================
+        // When null move detected that opponent can mate us, extend all moves
+        // to search for defensive resources more thoroughly.
+        // Only apply at sufficient depth and if we haven't extended too much.
+        if (mateThreat && currentExtensions < MAX_EXTENSIONS && extension == 0) {
+            // Extend to find defensive moves against the mate threat
+            // Only extend if this move might be a defensive resource:
+            // - Moves that give check (counter-attack)
+            // - Moves that block or escape
+            // We extend all moves here since any move could be the defense
+            extension = 1;
+        }
+
+        // =====================================================================
+        // PV EXTENSION
+        // =====================================================================
+        // In PV nodes, extend the first move to ensure the principal variation
+        // is searched more deeply. This helps avoid horizon effects on critical lines.
+        // Only apply at sufficient depth to avoid search explosion.
+        if (pvNode && moveCount == 1 && depth >= PV_EXT_MIN_DEPTH &&
+            currentExtensions < MAX_EXTENSIONS && extension == 0) {
+            extension = 1;
         }
 
         // =====================================================================
@@ -1820,85 +1859,119 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth, Square recap
         if (ttMoveCount > 0) ttMoves[0] = MOVE_NONE;
     }
 
-    // Use MovePicker with capture history for better ordering in qsearch
-    MovePicker mp(board, ttMoves, ttMoveCount, history, &captureHist);
-    Move m;
     int bestScore = inCheck ? -VALUE_INFINITE : staticEval;
+    Move m;
 
-    // First search captures (or evasions if in check)
-    while ((m = mp.next_move()) != MOVE_NONE) {
-        if (!MoveGen::is_legal(board, m)) {
-            continue;
-        }
+    // [CRITICAL FIX] When in check, we MUST iterate directly over evasion moves.
+    // MovePicker for qsearch uses generate_captures() internally, which doesn't
+    // generate evasion moves. This was causing incorrect checkmate detection
+    // because legalMoveCount was always 0 when in check.
+    if (inCheck) {
+        // Search ALL evasion moves (no pruning when in check)
+        for (size_t i = 0; i < moves.size(); ++i) {
+            m = moves[i].move;
 
-        // Hitung semua legal moves jika dalam skak (untuk detect skakmat)
-        if (inCheck) {
-            ++legalMoveCount;
-        }
-
-        PieceType capturedPt = NO_PIECE_TYPE;
-        int captureValue = 0;
-
-        if (!m.is_enpassant()) {
-            capturedPt = type_of(board.piece_on(m.to()));
-            captureValue = PieceValue[capturedPt];
-        } else {
-            capturedPt = PAWN;
-            captureValue = PieceValue[PAWN];
-        }
-
-        // Delta pruning: skip captures that can't possibly raise alpha
-        // Only for non-check and non-promotion
-        if (!inCheck && !m.is_promotion()) {
-            // Conservative delta margin from search_constants.hpp (200cp)
-            // Never prune captures of major pieces (Queen, Rook)
-            if (capturedPt != QUEEN && capturedPt != ROOK) {
-                if (staticEval + captureValue + DELTA_PRUNING_MARGIN < alpha) {
-                    continue;  // Can't raise alpha
-                }
-            }
-        }
-
-        // SEE pruning for losing captures
-        // Skip if: in check, capturing Queen, or SEE is winning
-        if (!inCheck && capturedPt != QUEEN) {
-            // Use -1 threshold: must at least break even
-            if (!SEE::see_ge(board, m, -1)) {
+            if (!MoveGen::is_legal(board, m)) {
                 continue;
             }
-        }
 
-        // Make move
-        StateInfo si;
-        board.do_move(m, si);
+            ++legalMoveCount;  // Count legal evasions for checkmate detection
 
-        // Determine if this is a recapture (capture on the same square as previous)
-        // Recaptures should NOT reduce qsDepth to ensure exchange sequences complete
-        bool isRecapture = (recaptureSquare != SQ_NONE && m.to() == recaptureSquare);
-        bool isCapture = (capturedPt != NO_PIECE_TYPE) || m.is_enpassant();
+            // Make move
+            StateInfo si;
+            board.do_move(m, si);
 
-        // Calculate new qsDepth:
-        // - Recaptures: don't reduce (continue exchange sequence)
-        // - Other captures: reduce by 1
-        int newQsDepth = isRecapture ? qsDepth : qsDepth - 1;
+            // For evasions, we don't track recapture squares (pass SQ_NONE)
+            // and keep qsDepth unchanged to ensure we search all evasion lines
 
-        // Pass the capture target square for recapture detection in child
-        Square newRecaptureSquare = isCapture ? m.to() : SQ_NONE;
+            int score = -qsearch(board, -beta, -alpha, qsDepth, SQ_NONE);
 
-        int score = -qsearch(board, -beta, -alpha, newQsDepth, newRecaptureSquare);
+            board.undo_move(m);
 
-        board.undo_move(m);
+            if (stopped) return 0;
 
-        if (stopped) return 0;
+            if (score > bestScore) {
+                bestScore = score;
 
-        if (score > bestScore) {
-            bestScore = score;
-
-            if (score > alpha) {
-                if (score >= beta) {
-                    return score;  // Beta cutoff
+                if (score > alpha) {
+                    if (score >= beta) {
+                        return score;  // Beta cutoff
+                    }
+                    alpha = score;
                 }
-                alpha = score;
+            }
+        }
+    } else {
+        // Not in check: use MovePicker for captures with proper ordering
+        MovePicker mp(board, ttMoves, ttMoveCount, history, &captureHist);
+
+        while ((m = mp.next_move()) != MOVE_NONE) {
+            if (!MoveGen::is_legal(board, m)) {
+                continue;
+            }
+
+            PieceType capturedPt = NO_PIECE_TYPE;
+            int captureValue = 0;
+
+            if (!m.is_enpassant()) {
+                capturedPt = type_of(board.piece_on(m.to()));
+                captureValue = PieceValue[capturedPt];
+            } else {
+                capturedPt = PAWN;
+                captureValue = PieceValue[PAWN];
+            }
+
+            // Delta pruning: skip captures that can't possibly raise alpha
+            if (!m.is_promotion()) {
+                // Conservative delta margin from search_constants.hpp (200cp)
+                // Never prune captures of major pieces (Queen, Rook)
+                if (capturedPt != QUEEN && capturedPt != ROOK) {
+                    if (staticEval + captureValue + DELTA_PRUNING_MARGIN < alpha) {
+                        continue;  // Can't raise alpha
+                    }
+                }
+            }
+
+            // SEE pruning for losing captures
+            if (capturedPt != QUEEN) {
+                // Use -1 threshold: must at least break even
+                if (!SEE::see_ge(board, m, -1)) {
+                    continue;
+                }
+            }
+
+            // Make move
+            StateInfo si;
+            board.do_move(m, si);
+
+            // Determine if this is a recapture (capture on the same square as previous)
+            // Recaptures should NOT reduce qsDepth to ensure exchange sequences complete
+            bool isRecapture = (recaptureSquare != SQ_NONE && m.to() == recaptureSquare);
+            bool isCapture = (capturedPt != NO_PIECE_TYPE) || m.is_enpassant();
+
+            // Calculate new qsDepth:
+            // - Recaptures: don't reduce (continue exchange sequence)
+            // - Other captures: reduce by 1
+            int newQsDepth = isRecapture ? qsDepth : qsDepth - 1;
+
+            // Pass the capture target square for recapture detection in child
+            Square newRecaptureSquare = isCapture ? m.to() : SQ_NONE;
+
+            int score = -qsearch(board, -beta, -alpha, newQsDepth, newRecaptureSquare);
+
+            board.undo_move(m);
+
+            if (stopped) return 0;
+
+            if (score > bestScore) {
+                bestScore = score;
+
+                if (score > alpha) {
+                    if (score >= beta) {
+                        return score;  // Beta cutoff
+                    }
+                    alpha = score;
+                }
             }
         }
     }

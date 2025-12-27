@@ -74,6 +74,14 @@ constexpr int SINGULAR_DOUBLE_EXT_BASE = 40; // Base threshold for double extens
 constexpr int CAPTURE_EXT_MIN_DEPTH = 6;     // Minimum depth for capture extension
 constexpr int CAPTURE_EXT_SEE_THRESHOLD = 200; // SEE threshold for extending captures
 
+// Mate Threat Extension parameters
+// When null move search shows opponent can mate us, extend to find defenses
+constexpr int MATE_THREAT_EXT_MIN_DEPTH = 4; // Minimum depth for mate threat extension
+
+// PV Extension parameters
+// Extend first move in PV nodes at sufficient depth for deeper analysis
+constexpr int PV_EXT_MIN_DEPTH = 5;          // Minimum depth for PV extension
+
 // ============================================================================
 // Multi-Cut Parameters
 // ============================================================================

@@ -586,6 +586,9 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
     ThreadStack* ss = (ply + 2 < MAX_PLY + 4) ? &thread->stack[ply + 2] : &thread->stack[MAX_PLY + 3];
     bool doubleNull = (ply >= 1 && ply + 1 < MAX_PLY + 4 && thread->stack[ply + 1].nullMovePruned);
 
+    // Mate Threat Detection - set to true if null move shows opponent can mate us
+    bool mateThreat = false;
+
     if (!pvNode && !inCheck && staticEval >= beta && depth >= 3 &&
         hasNonPawnMaterial && !doubleNull) {
 
@@ -606,6 +609,11 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
         if (nullScore >= beta) {
             if (nullScore >= VALUE_MATE_IN_MAX_PLY) nullScore = beta;
             return nullScore;
+        }
+        // MATE THREAT EXTENSION DETECTION
+        // If null move shows we are getting mated, set flag to extend search
+        else if (depth >= MATE_THREAT_EXT_MIN_DEPTH && nullScore <= VALUE_MATED_IN_MAX_PLY) {
+            mateThreat = true;
         }
     }
 
@@ -681,6 +689,19 @@ int alpha_beta(SearchThread* thread, Board& board, int alpha, int beta,
         // In-check extension: when WE are in check, extend to find defensive resources
         if (inCheck && currentExt < MAX_EXTENSIONS) {
             extension = std::max(extension, 1);
+        }
+
+        // MATE THREAT EXTENSION
+        // When null move detected opponent can mate us, extend to find defenses
+        if (mateThreat && currentExt < MAX_EXTENSIONS && extension == 0) {
+            extension = 1;
+        }
+
+        // PV EXTENSION
+        // Extend first move in PV nodes at sufficient depth
+        if (pvNode && moveCount == 1 && depth >= PV_EXT_MIN_DEPTH &&
+            currentExt < MAX_EXTENSIONS && extension == 0) {
+            extension = 1;
         }
 
         int newDepth = searchDepth - 1 + extension;
