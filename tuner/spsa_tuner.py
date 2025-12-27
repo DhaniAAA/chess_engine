@@ -54,20 +54,51 @@ class TunableParam:
         return max(self.min_val, min(self.max_val, val))
 
 
-# Default parameters to tune (matching UCI options in the engine)
+# Default parameters to tune (matching tuning.cpp in the engine)
 DEFAULT_PARAMS = [
+    # Material Values (Middlegame)
     TunableParam("PawnValueMG", 100, 70, 130),
-    TunableParam("PawnValueEG", 130, 100, 160),
     TunableParam("KnightValueMG", 320, 280, 360),
-    TunableParam("KnightValueEG", 340, 300, 380),
     TunableParam("BishopValueMG", 330, 290, 370),
-    TunableParam("BishopValueEG", 350, 310, 390),
     TunableParam("RookValueMG", 500, 450, 550),
-    TunableParam("RookValueEG", 550, 500, 600),
     TunableParam("QueenValueMG", 950, 850, 1050),
+
+    # Material Values (Endgame)
+    TunableParam("PawnValueEG", 130, 100, 160),
+    TunableParam("KnightValueEG", 340, 300, 380),
+    TunableParam("BishopValueEG", 350, 310, 390),
+    TunableParam("RookValueEG", 550, 500, 600),
     TunableParam("QueenValueEG", 1000, 900, 1100),
-    TunableParam("RookOpenFileBonusMG", 25, 10, 50),
-    TunableParam("RookOpenFileBonusEG", 15, 5, 35),
+
+    # Piece Activity Bonuses (Middlegame)
+    TunableParam("BishopPairBonusMG", 30, 0, 60),
+    TunableParam("RookOpenFileBonusMG", 25, 0, 50),
+    TunableParam("RookSemiOpenFileBonusMG", 11, 0, 30),
+    TunableParam("RookOnSeventhBonusMG", 20, 0, 50),
+    TunableParam("KnightOutpostBonusMG", 25, 0, 50),
+
+    # Piece Activity Bonuses (Endgame)
+    TunableParam("BishopPairBonusEG", 50, 20, 80),
+    TunableParam("RookOpenFileBonusEG", 15, 0, 40),
+    TunableParam("RookSemiOpenFileBonusEG", 3, 0, 20),
+    TunableParam("RookOnSeventhBonusEG", 30, 0, 60),
+    TunableParam("KnightOutpostBonusEG", 15, 0, 40),
+
+    # Pawn Structure (Middlegame)
+    TunableParam("IsolatedPawnPenaltyMG", -45, -70, -10),
+    TunableParam("DoubledPawnPenaltyMG", -16, -40, 0),
+    TunableParam("BackwardPawnPenaltyMG", -10, -30, 0),
+    TunableParam("ConnectedPawnBonusMG", 5, 0, 20),
+    TunableParam("PhalanxBonusMG", 10, 0, 25),
+
+    # Pawn Structure (Endgame)
+    TunableParam("IsolatedPawnPenaltyEG", -20, -50, 0),
+    TunableParam("DoubledPawnPenaltyEG", -21, -50, 0),
+    TunableParam("BackwardPawnPenaltyEG", -15, -35, 0),
+    TunableParam("ConnectedPawnBonusEG", 2, 0, 15),
+    TunableParam("PhalanxBonusEG", 8, 0, 20),
+
+    # King Safety
     TunableParam("KingSafetyWeight", 83, 50, 150),
 ]
 
@@ -117,8 +148,10 @@ class SPSATuner:
 
         # Results tracking
         self.iteration = 0
-        self.best_params = {p.name: p.value for p in params}
+        self.current_params = {p.name: p.value for p in params}  # Current/final params
+        self.best_params = {p.name: p.value for p in params}     # Best params seen
         self.best_score = 0.5    # Track best score seen
+        self.best_iteration = 0  # When best score was found
         self.history: List[Dict] = []
 
         # Pre-load EPD positions (once, not every iteration)
@@ -357,15 +390,24 @@ class SPSATuner:
                 step = a_k * param.a_end * gradient
                 param.value = param.clamp(param.value + step)
 
-        # Update best params
-        self.best_params = {p.name: p.value for p in self.params}
+        # Update current/final params
+        self.current_params = {p.name: p.value for p in self.params}
+
+        # Track best score (when plus score is significantly better)
+        combined_score = score_plus
+        if combined_score > self.best_score:
+            self.best_score = combined_score
+            self.best_params = dict(self.current_params)
+            self.best_iteration = k
 
         # Record history
         result = {
             "iteration": k,
             "score_plus": score_plus,
             "score_minus": score_minus,
-            "params": dict(self.best_params),
+            "best_score": self.best_score,
+            "best_iteration": self.best_iteration,
+            "params": dict(self.current_params),
         }
         self.history.append(result)
 
@@ -391,7 +433,7 @@ class SPSATuner:
             result = self.iterate(use_simple_games)
 
             print(f"[{i+1}/{iterations}] Plus: {result['score_plus']:.3f}, "
-                  f"Minus: {result['score_minus']:.3f}")
+                  f"Minus: {result['score_minus']:.3f}, Best: {self.best_score:.3f} @ iter {self.best_iteration}")
 
             # Print current best values every 10 iterations
             if (i + 1) % 10 == 0:
@@ -400,14 +442,20 @@ class SPSATuner:
                     print(f"  {p.name}: {int(p.value)}")
                 print()
 
-        return self.best_params
+        return self.current_params  # Return final params after all iterations
 
     def save_results(self, filename: str = "spsa_results.json"):
         """Save tuning results to JSON file."""
         output = {
+            "summary": {
+                "total_iterations": self.iteration,
+                "best_score": round(self.best_score, 4),
+                "best_iteration": self.best_iteration,
+            },
+            "final_params": {k: int(v) for k, v in self.current_params.items()},
             "best_params": {k: int(v) for k, v in self.best_params.items()},
+            "initial_params": {p.name: int(p.min_val + (p.max_val - p.min_val) / 2) for p in DEFAULT_PARAMS},
             "history": self.history,
-            "iterations": self.iteration,
         }
         with open(filename, 'w') as f:
             json.dump(output, f, indent=2)
@@ -417,14 +465,15 @@ class SPSATuner:
         """Generate C++ code snippet with tuned values."""
         lines = [
             "// ============================================================================",
-            "// SPSA Tuned Values",
+            "// SPSA Tuned Values (Best Parameters)",
             "// Generated by spsa_tuner.py",
+            f"// Best Score: {self.best_score:.4f} at iteration {self.best_iteration}",
             "// ============================================================================",
             "",
         ]
 
         for name, value in self.best_params.items():
-            lines.append(f"// {name} = {int(value)};")
+            lines.append(f"// constexpr int {name} = {int(value)};")
 
         return "\n".join(lines)
 
@@ -475,9 +524,15 @@ def main():
 
     # Print final values
     print("\n" + "=" * 60)
-    print("FINAL TUNED VALUES:")
+    print("FINAL TUNED VALUES (after all iterations):")
     print("=" * 60)
     for name, value in best_params.items():
+        print(f"{name}: {int(value)}")
+
+    print("\n" + "=" * 60)
+    print(f"BEST VALUES (from iteration {tuner.best_iteration}, score: {tuner.best_score:.4f}):")
+    print("=" * 60)
+    for name, value in tuner.best_params.items():
         print(f"{name}: {int(value)}")
 
     print("\n" + tuner.generate_cpp_output())
