@@ -110,19 +110,28 @@ PERFT_POSITIONS = [
 
 def find_engine() -> str:
     """Find the engine executable."""
+    # Priority order: Linux paths first, then Windows
     possible_paths = [
-        "./output/main.exe",
         "./output/main",
-        "../output/main.exe",
-        "../output/main",
-        "output/main.exe",
         "output/main",
-        "main.exe",
+        "../output/main",
         "main",
+        "./output/main.exe",
+        "output/main.exe",
+        "../output/main.exe",
+        "main.exe",
     ]
 
     for path in possible_paths:
         if os.path.exists(path):
+            # On Linux, also check if executable
+            if os.name != 'nt' and not os.access(path, os.X_OK):
+                print(f"Warning: {path} exists but is not executable. Trying chmod +x...")
+                try:
+                    os.chmod(path, 0o755)
+                except Exception as e:
+                    print(f"  Could not set executable permission: {e}")
+                    continue
             return path
 
     raise FileNotFoundError("Could not find engine executable. Please compile first.")

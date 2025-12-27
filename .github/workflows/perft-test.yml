@@ -66,11 +66,12 @@ jobs:
         run: |
           make clean || true
           make -j$(nproc)
+          chmod +x output/main
           ls -la output/
 
       - name: Verify Engine Works
         run: |
-          echo -e "uci\nquit" | ./output/main
+          ./output/main <<< $'uci\nquit'
 
       # Default behavior: run all positions at depth 5
       - name: Run Perft Tests (All Positions)
