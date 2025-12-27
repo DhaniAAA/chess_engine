@@ -60,7 +60,7 @@ jobs:
       - name: Build chess engine
         run: |
           make clean || true
-          make release -j$(nproc)
+          make -j$(nproc)
           chmod +x output/main
           ls -la output/
 

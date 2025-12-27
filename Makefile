@@ -46,9 +46,10 @@ RM			:= del /q /f
 MD	:= mkdir
 else
 MAIN	:= main
-SOURCEDIRS	:= $(shell find $(SRC) -type d)
-INCLUDEDIRS	:= $(shell find $(INCLUDE) -type d)
-LIBDIRS		:= $(shell find $(LIB) -type d)
+SOURCEDIRS	:= $(shell find $(SRC) -type d 2>/dev/null || echo $(SRC))
+INCLUDEDIRS	:= $(shell find $(INCLUDE) -type d 2>/dev/null || echo $(INCLUDE))
+# Check if lib directory exists before using find
+LIBDIRS		:= $(shell if [ -d "$(LIB)" ]; then find $(LIB) -type d 2>/dev/null; fi)
 FIXPATH = $1
 RM = rm -f
 MD	:= mkdir -p
