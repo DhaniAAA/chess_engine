@@ -2293,9 +2293,14 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth, Square recap
                 captureValue = PieceValue[PAWN];
             }
 
+            // [FIX] Check if this capture gives check BEFORE any pruning
+            // Sacrifices that give check (e.g., Nxf7+, Qxh7+) must NOT be pruned
+            bool captureGivesCheck = MoveGen::gives_check(board, m);
+
             // Delta pruning: skip captures that can't possibly raise alpha
-            if (!m.is_promotion()) {
-                // Conservative delta margin from search_constants.hpp (200cp)
+            // NEVER prune captures that give check - they can lead to mate
+            if (!m.is_promotion() && !captureGivesCheck) {
+                // Conservative delta margin from search_constants.hpp
                 // Never prune captures of major pieces (Queen, Rook)
                 if (capturedPt != QUEEN && capturedPt != ROOK) {
                     if (staticEval + captureValue + DELTA_PRUNING_MARGIN < alpha) {
@@ -2305,8 +2310,9 @@ int Search::qsearch(Board& board, int alpha, int beta, int qsDepth, Square recap
             }
 
             // SEE pruning for losing captures
-            if (capturedPt != QUEEN) {
-                // Use -1 threshold: must at least break even
+            // [FIX] NEVER prune captures that give check - they can be tactical sacrifices
+            if (capturedPt != QUEEN && !captureGivesCheck) {
+                // Only prune losing captures that DON'T give check
                 if (!SEE::see_ge(board, m, -1)) {
                     continue;
                 }
