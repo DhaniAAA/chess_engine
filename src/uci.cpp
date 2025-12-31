@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <iomanip>
 #include "tuning.hpp"
 
 
@@ -82,6 +83,8 @@ void UCIHandler::loop() {
                 cmd_eval();
             } else if (token == "ponderhit") {
                 cmd_ponderhit();
+            } else if (token == "bench") {
+                cmd_bench(is);
             }
         }
     } catch (const std::exception& e) {
@@ -570,6 +573,140 @@ void UCIHandler::cmd_eval() {
     int score = Searcher.evaluate(board);
     std::cout << "Evaluation: " << score << " cp" << std::endl;
     std::cout << "Side to move: " << (board.side_to_move() == WHITE ? "White" : "Black") << std::endl;
+}
+
+void UCIHandler::cmd_bench(std::istringstream& is) {
+    // Default parameters
+    int depth = 13;
+    int numThreads = 1;
+    int hashMB = 16;
+
+    // Parse optional arguments: bench [depth] [threads] [hash]
+    std::string token;
+    if (is >> token) depth = std::stoi(token);
+    if (is >> token) numThreads = std::stoi(token);
+    if (is >> token) hashMB = std::stoi(token);
+
+    // Clamp values
+    depth = std::max(1, std::min(depth, 40));
+    numThreads = std::max(1, std::min(numThreads, 128));
+    hashMB = std::max(1, std::min(hashMB, 4096));
+
+    // Apply settings temporarily
+    int oldHash = options.hash;
+    int oldThreads = options.threads;
+    TT.resize(hashMB);
+    Threads.set_thread_count(numThreads);
+
+    std::cout << "\n===============================================" << std::endl;
+    std::cout << "     GC-Engine Benchmark" << std::endl;
+    std::cout << "===============================================" << std::endl;
+    std::cout << "Depth: " << depth << std::endl;
+    std::cout << "Threads: " << numThreads << std::endl;
+    std::cout << "Hash: " << hashMB << " MB" << std::endl;
+    std::cout << "===============================================\n" << std::endl;
+
+    // Standard benchmark positions (diverse set for testing)
+    // NOTE: Avoiding extremely complex endgame positions that can explode in nodes
+    const char* positions[] = {
+        // Starting position
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        // Kiwipete (complex middlegame)
+        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        // Position 3 (Italian Game)
+        "r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+        // Position 4 (Sicilian Defense)
+        "r1bqkbnr/pp1ppppp/2n5/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+        // Position 5 (middlegame with promotion)
+        "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+        // Position 6 (Sicilian-like)
+        "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
+        // Position 7 (Queen's Gambit)
+        "rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 4",
+        // Position 8 (Scholar's Mate defense)
+        "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
+        // Position 9 (Ruy Lopez)
+        "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+        // Position 10 (Simple King Pawn endgame)
+        "8/8/4k3/3p4/3P1K2/8/8/8 w - - 0 1",
+        // Position 11 (Queen vs pieces)
+        "r1bqr1k1/pp1nbppp/2p2n2/3p2B1/3P4/2NBP3/PPQ1NPPP/R3K2R w KQ - 3 10",
+        // Position 12 (King's Indian Attack)
+        "r1bq1rk1/ppppbppp/2n2n2/4p3/2P5/5NP1/PP1PPPBP/RNBQ1RK1 w - - 5 6"
+    };
+
+    const int numPositions = sizeof(positions) / sizeof(positions[0]);
+
+    U64 totalNodes = 0;
+    U64 totalTbHits = 0;
+    int totalSelDepth = 0;
+    int maxSelDepth = 0;
+
+    auto startTotal = std::chrono::steady_clock::now();
+
+    // Clear TT and history before benchmark
+    TT.clear();
+    Searcher.clear_history();
+    Threads.clear_all_history();
+
+    for (int i = 0; i < numPositions; ++i) {
+        StateInfo si;
+        Board benchBoard;
+        benchBoard.set(positions[i], &si);
+
+        std::cout << "Position " << (i + 1) << "/" << numPositions;
+        std::cout << ": " << positions[i] << std::endl;
+
+        SearchLimits benchLimits;
+        benchLimits.depth = depth;
+        // Add node limit as safety stop (50M nodes per position max)
+        benchLimits.nodes = 50000000;
+
+        auto posStart = std::chrono::steady_clock::now();
+        Searcher.start(benchBoard, benchLimits);
+        auto posEnd = std::chrono::steady_clock::now();
+
+        const SearchStats& stats = Searcher.stats();
+
+        auto posTime = std::chrono::duration_cast<std::chrono::milliseconds>(posEnd - posStart).count();
+        U64 posNps = posTime > 0 ? stats.nodes * 1000 / posTime : stats.nodes;
+
+        std::cout << "  Nodes: " << stats.nodes
+                  << " | Time: " << posTime << "ms"
+                  << " | NPS: " << posNps
+                  << " | SelDepth: " << stats.selDepth << std::endl;
+        std::cout << std::endl;
+
+        totalNodes += stats.nodes;
+        totalTbHits += stats.tbHits;
+        totalSelDepth += stats.selDepth;
+        maxSelDepth = std::max(maxSelDepth, stats.selDepth);
+    }
+
+    auto endTotal = std::chrono::steady_clock::now();
+    auto totalTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTotal - startTotal).count();
+    U64 avgNps = totalTime > 0 ? totalNodes * 1000 / totalTime : totalNodes;
+    double avgSelDepth = static_cast<double>(totalSelDepth) / numPositions;
+
+    std::cout << "===============================================" << std::endl;
+    std::cout << "                  RESULTS" << std::endl;
+    std::cout << "===============================================" << std::endl;
+    std::cout << "Total Nodes   : " << totalNodes << std::endl;
+    std::cout << "Total Time    : " << totalTime << " ms" << std::endl;
+    std::cout << "Nodes/Second  : " << avgNps << std::endl;
+    std::cout << "TB Hits       : " << totalTbHits << std::endl;
+    std::cout << "Avg SelDepth  : " << std::fixed << std::setprecision(1) << avgSelDepth << std::endl;
+    std::cout << "Max SelDepth  : " << maxSelDepth << std::endl;
+    std::cout << "Positions     : " << numPositions << std::endl;
+    std::cout << "===============================================" << std::endl;
+    std::cout << std::endl;
+
+    // Signature (for comparing between different builds)
+    std::cout << totalNodes << " nodes " << avgNps << " nps" << std::endl;
+
+    // Restore settings
+    TT.resize(oldHash);
+    Threads.set_thread_count(oldThreads);
 }
 
 // ============================================================================
