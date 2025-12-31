@@ -89,6 +89,7 @@ private:
     void cmd_divide(std::istringstream& is);  // Debugging command
     void cmd_d();  // Display board (debug)
     void cmd_eval(); // Display evaluation (debug)
+    void cmd_bench(std::istringstream& is); // Benchmark command
 
     // Helper functions
     void parse_moves(std::istringstream& is);
