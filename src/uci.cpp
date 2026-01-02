@@ -660,7 +660,7 @@ void UCIHandler::cmd_bench(std::istringstream& is) {
         SearchLimits benchLimits;
         benchLimits.depth = depth;
         // Add node limit as safety stop (50M nodes per position max)
-        benchLimits.nodes = 50000000;
+        benchLimits.nodes = 100000000;
 
         auto posStart = std::chrono::steady_clock::now();
         Searcher.start(benchBoard, benchLimits);

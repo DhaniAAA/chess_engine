@@ -582,9 +582,17 @@ private:
     MoveList badCaptures;
     MoveList equalCaptures;  // Equal captures (SEE == 0) deferred after quiets
     MoveList quietChecks;    // Quiet moves that give check
+
+    // [OPTIMIZATION] Track quiet check moves for O(1) lookup in STAGE_QUIETS
+    // Instead of calling gives_check() for every quiet move, we check this array
+    static constexpr int MAX_QUIET_CHECKS = 32;
+    Move quietCheckMoves[MAX_QUIET_CHECKS];  // Array of moves that are quiet checks
+    int quietCheckCount;                      // Number of quiet check moves
+
     int currentIdx;
     int equalCaptureIdx;     // Index for equal captures iteration
     int quietCheckIdx;       // Index for quiet checks iteration
+    int badCaptureIdx;       // [FIX] Separate index for bad captures iteration
     int ply;
 
     MovePickStage stage;
@@ -594,6 +602,7 @@ private:
     void score_quiet_checks();
     Move pick_best();
     bool is_tt_move(Move m) const;
+    bool is_quiet_check(Move m) const;  // [NEW] O(1) check if move is a quiet check
 };
 
 #endif // MOVEORDER_HPP

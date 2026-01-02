@@ -1,9 +1,5 @@
 #include "movegen.hpp"
 
-// ============================================================================
-// Pawn Move Generation
-// ============================================================================
-
 void MoveGen::add_promotions(MoveList& moves, Square from, Square to) {
     moves.add(Move::make_promotion(from, to, QUEEN));
     moves.add(Move::make_promotion(from, to, ROOK));
@@ -27,7 +23,6 @@ void MoveGen::generate_pawn_moves(const Board& board, MoveList& moves, Bitboard 
     Bitboard pawns_on_7 = pawns & Rank7BB;
     Bitboard pawns_not_7 = pawns & ~Rank7BB;
 
-    // Single push (non-promotion)
     Bitboard push1 = shift<Up>(pawns_not_7) & empty;
     Bitboard push2 = shift<Up>(push1 & Rank3BB) & empty;
 
@@ -46,7 +41,6 @@ void MoveGen::generate_pawn_moves(const Board& board, MoveList& moves, Bitboard 
         moves.add(Move::make(from, to));
     }
 
-    // Promotions (push)
     if (pawns_on_7) {
         Bitboard promo_push = shift<Up>(pawns_on_7) & empty & target;
 
@@ -57,7 +51,6 @@ void MoveGen::generate_pawn_moves(const Board& board, MoveList& moves, Bitboard 
         }
     }
 
-    // Captures (including promotion captures)
     Bitboard cap_left = shift<UpLeft>(pawns_not_7) & enemies;
     Bitboard cap_right = shift<UpRight>(pawns_not_7) & enemies;
 
@@ -73,7 +66,6 @@ void MoveGen::generate_pawn_moves(const Board& board, MoveList& moves, Bitboard 
         moves.add(Move::make(from, to));
     }
 
-    // Promotion captures
     if (pawns_on_7) {
         Bitboard promo_cap_left = shift<UpLeft>(pawns_on_7) & enemies;
         Bitboard promo_cap_right = shift<UpRight>(pawns_on_7) & enemies;
@@ -91,18 +83,10 @@ void MoveGen::generate_pawn_moves(const Board& board, MoveList& moves, Bitboard 
         }
     }
 
-    // En passant
-    // For evasions, the captured pawn must be on the target (blocking/capturing checker)
     Square ep = board.en_passant_square();
     if (ep != SQ_NONE) {
-        // Captured pawn is on the square behind ep from the perspective of Them (the captured side)
-        // If Us = WHITE moving, ep is rank 6, captured pawn is rank 5 (ep - 8)
-        // If Us = BLACK moving, ep is rank 3, captured pawn is rank 4 (ep + 8)
         Square captured_pawn_sq = (Us == WHITE) ? Square(ep - 8) : Square(ep + 8);
 
-        // Only generate en passant if either:
-        // 1. The ep square itself is in target (for normal generation with FULL_BB), OR
-        // 2. The captured pawn square is in target (for evasions, to capture the checking pawn)
         if ((target & ep) || (target & captured_pawn_sq)) {
             Bitboard ep_pawns = pawn_attacks_bb(Them, ep) & pawns;
 
@@ -113,10 +97,6 @@ void MoveGen::generate_pawn_moves(const Board& board, MoveList& moves, Bitboard 
         }
     }
 }
-
-// ============================================================================
-// Piece Move Generation
-// ============================================================================
 
 template<PieceType Pt>
 void MoveGen::generate_piece_moves(const Board& board, MoveList& moves,
@@ -149,10 +129,6 @@ void MoveGen::generate_piece_moves(const Board& board, MoveList& moves,
     }
 }
 
-// ============================================================================
-// Castling Generation
-// ============================================================================
-
 template<Color Us>
 void MoveGen::generate_castling(const Board& board, MoveList& moves) {
     constexpr CastlingRights KingSide = (Us == WHITE) ? WHITE_OO : BLACK_OO;
@@ -165,14 +141,12 @@ void MoveGen::generate_castling(const Board& board, MoveList& moves) {
     Bitboard occupied = board.pieces();
     Color them = ~Us;
 
-    // Kingside castling
     if (cr & KingSide) {
         constexpr Bitboard PathOO = (Us == WHITE) ?
             (square_bb(SQ_F1) | square_bb(SQ_G1)) :
             (square_bb(SQ_F8) | square_bb(SQ_G8));
 
         if (!(occupied & PathOO)) {
-            // Check that king path is not attacked
             constexpr Square F_sq = (Us == WHITE) ? SQ_F1 : SQ_F8;
             if (!board.is_attacked_by(them, KingFrom) &&
                 !board.is_attacked_by(them, F_sq) &&
@@ -182,7 +156,6 @@ void MoveGen::generate_castling(const Board& board, MoveList& moves) {
         }
     }
 
-    // Queenside castling
     if (cr & QueenSide) {
         constexpr Bitboard PathOOO = (Us == WHITE) ?
             (square_bb(SQ_D1) | square_bb(SQ_C1) | square_bb(SQ_B1)) :
@@ -192,7 +165,6 @@ void MoveGen::generate_castling(const Board& board, MoveList& moves) {
             (square_bb(SQ_D8) | square_bb(SQ_C8));
 
         if (!(occupied & PathOOO)) {
-            // Check that king path is not attacked (b-file doesn't need to be checked)
             constexpr Square D_sq = (Us == WHITE) ? SQ_D1 : SQ_D8;
             if (!board.is_attacked_by(them, KingFrom) &&
                 !board.is_attacked_by(them, D_sq) &&
@@ -203,13 +175,9 @@ void MoveGen::generate_castling(const Board& board, MoveList& moves) {
     }
 }
 
-// ============================================================================
-// Main Generation Functions
-// ============================================================================
-
 void MoveGen::generate_all(const Board& board, MoveList& moves) {
     Color us = board.side_to_move();
-    Bitboard target = ~board.pieces(us);  // Can move to empty squares or enemy pieces
+    Bitboard target = ~board.pieces(us);
 
     if (us == WHITE) {
         generate_pawn_moves<WHITE>(board, moves, FULL_BB);
@@ -229,7 +197,7 @@ void MoveGen::generate_all(const Board& board, MoveList& moves) {
 void MoveGen::generate_captures(const Board& board, MoveList& moves) {
     Color us = board.side_to_move();
     Color them = ~us;
-    Bitboard target = board.pieces(them);  // Only captures
+    Bitboard target = board.pieces(them);
 
     if (us == WHITE) {
         generate_pawn_moves<WHITE>(board, moves, target);
@@ -246,7 +214,7 @@ void MoveGen::generate_captures(const Board& board, MoveList& moves) {
 
 void MoveGen::generate_quiets(const Board& board, MoveList& moves) {
     Color us = board.side_to_move();
-    Bitboard target = ~board.pieces();  // Only empty squares
+    Bitboard target = ~board.pieces();
 
     if (us == WHITE) {
         generate_pawn_moves<WHITE>(board, moves, target);
@@ -263,31 +231,171 @@ void MoveGen::generate_quiets(const Board& board, MoveList& moves) {
     generate_piece_moves<KING>(board, moves, us, target);
 }
 
+void MoveGen::generate_checking_moves(const Board& board, MoveList& moves) {
+    Color us = board.side_to_move();
+    Color them = ~us;
+    Square theirKing = board.king_square(them);
+    Bitboard occupied = board.pieces();
+    Bitboard empty = ~occupied;
+    Bitboard ourPieces = board.pieces(us);
+
+    Bitboard knightCheckSqs = board.check_squares(KNIGHT);
+    Bitboard bishopCheckSqs = board.check_squares(BISHOP);
+    Bitboard rookCheckSqs = board.check_squares(ROOK);
+    Bitboard queenCheckSqs = board.check_squares(QUEEN);
+
+    Bitboard discoveredBlockers = board.blockers_for_king(them) & ourPieces;
+
+    Bitboard knights = board.pieces(us, KNIGHT);
+    while (knights) {
+        Square from = pop_lsb(knights);
+        Bitboard attacks = knight_attacks_bb(from);
+
+        Bitboard directChecks = attacks & empty & knightCheckSqs;
+        while (directChecks) {
+            Square to = pop_lsb(directChecks);
+            moves.add(Move::make(from, to));
+        }
+
+        if (discoveredBlockers & from) {
+            Bitboard discMoves = attacks & empty & ~knightCheckSqs;
+            while (discMoves) {
+                Square to = pop_lsb(discMoves);
+                if (!aligned(from, to, theirKing)) {
+                    moves.add(Move::make(from, to));
+                }
+            }
+        }
+    }
+
+    Bitboard bishops = board.pieces(us, BISHOP);
+    while (bishops) {
+        Square from = pop_lsb(bishops);
+        Bitboard attacks = bishop_attacks_bb(from, occupied);
+
+        Bitboard directChecks = attacks & empty & bishopCheckSqs;
+        while (directChecks) {
+            Square to = pop_lsb(directChecks);
+            moves.add(Move::make(from, to));
+        }
+
+        if (discoveredBlockers & from) {
+            Bitboard discMoves = attacks & empty & ~bishopCheckSqs;
+            while (discMoves) {
+                Square to = pop_lsb(discMoves);
+                if (!aligned(from, to, theirKing)) {
+                    moves.add(Move::make(from, to));
+                }
+            }
+        }
+    }
+
+    Bitboard rooks = board.pieces(us, ROOK);
+    while (rooks) {
+        Square from = pop_lsb(rooks);
+        Bitboard attacks = rook_attacks_bb(from, occupied);
+
+        Bitboard directChecks = attacks & empty & rookCheckSqs;
+        while (directChecks) {
+            Square to = pop_lsb(directChecks);
+            moves.add(Move::make(from, to));
+        }
+
+        if (discoveredBlockers & from) {
+            Bitboard discMoves = attacks & empty & ~rookCheckSqs;
+            while (discMoves) {
+                Square to = pop_lsb(discMoves);
+                if (!aligned(from, to, theirKing)) {
+                    moves.add(Move::make(from, to));
+                }
+            }
+        }
+    }
+
+    Bitboard queens = board.pieces(us, QUEEN);
+    while (queens) {
+        Square from = pop_lsb(queens);
+        Bitboard attacks = queen_attacks_bb(from, occupied);
+
+        Bitboard directChecks = attacks & empty & queenCheckSqs;
+        while (directChecks) {
+            Square to = pop_lsb(directChecks);
+            moves.add(Move::make(from, to));
+        }
+    }
+
+    Bitboard pawns = board.pieces(us, PAWN);
+    Bitboard pawnCheckSqs = pawn_attacks_bb(them, theirKing);
+
+    Bitboard rank7 = (us == WHITE) ? RANK_7_BB : RANK_2_BB;
+    pawns &= ~rank7;
+
+    Direction push = pawn_push(us);
+    Bitboard rank3 = (us == WHITE) ? RANK_3_BB : RANK_6_BB;
+
+    while (pawns) {
+        Square from = pop_lsb(pawns);
+
+        Square to1 = Square(from + push);
+        if (board.empty(to1)) {
+            if (pawnCheckSqs & to1) {
+                moves.add(Move::make(from, to1));
+            }
+            else if ((discoveredBlockers & from) && !aligned(from, to1, theirKing)) {
+                moves.add(Move::make(from, to1));
+            }
+
+            Rank fromRank = rank_of(from);
+            if ((us == WHITE && fromRank == RANK_2) || (us == BLACK && fromRank == RANK_7)) {
+                Square to2 = Square(to1 + push);
+                if (board.empty(to2)) {
+                    if (pawnCheckSqs & to2) {
+                        moves.add(Move::make(from, to2));
+                    }
+                    else if ((discoveredBlockers & from) && !aligned(from, to2, theirKing)) {
+                        moves.add(Move::make(from, to2));
+                    }
+                }
+            }
+        }
+    }
+
+    if (discoveredBlockers & board.king_square(us)) {
+        Square ksq = board.king_square(us);
+        Bitboard kingMoves = king_attacks_bb(ksq) & empty;
+
+        while (kingMoves) {
+            Square to = pop_lsb(kingMoves);
+            if (!aligned(ksq, to, theirKing)) {
+                Bitboard occ = (occupied ^ ksq) | to;
+                if (!(board.attackers_to(to, occ) & board.pieces(them))) {
+                    moves.add(Move::make(ksq, to));
+                }
+            }
+        }
+    }
+}
+
 void MoveGen::generate_evasions(const Board& board, MoveList& moves) {
     Color us = board.side_to_move();
     Color them = ~us;
     Square ksq = board.king_square(us);
     Bitboard checkers = board.checkers();
 
-    // King moves (always possible during check)
     Bitboard king_moves = king_attacks_bb(ksq) & ~board.pieces(us);
-    Bitboard occupied = board.pieces() ^ square_bb(ksq);  // Remove king for slider attacks
+    Bitboard occupied = board.pieces() ^ square_bb(ksq);
 
-    // Remove squares attacked by enemy
     while (king_moves) {
         Square to = pop_lsb(king_moves);
-        // Check if the destination is attacked by enemy (excluding the king)
         if (!(board.attackers_to(to, occupied) & board.pieces(them))) {
             moves.add(Move::make(ksq, to));
         }
     }
 
-    // If double check, only king moves are legal
     if (more_than_one(checkers)) {
         return;
     }
 
-    // Single checker - can block or capture
     Square checker_sq = lsb(checkers);
     Bitboard target = between_bb(ksq, checker_sq) | checkers;
 
@@ -303,14 +411,8 @@ void MoveGen::generate_evasions(const Board& board, MoveList& moves) {
     generate_piece_moves<QUEEN>(board, moves, us, target);
 }
 
-// ============================================================================
-// Legality Checking
-// ============================================================================
-
-// File: src/movegen.cpp
-
 bool MoveGen::is_legal(const Board& board, Move m) {
-    if (m.is_none()) return false; // Safety check
+    if (m.is_none()) return false;
 
     Color us = board.side_to_move();
     Square from = m.from();
@@ -328,38 +430,34 @@ bool MoveGen::is_legal(const Board& board, Move m) {
     Color them = ~us;
     Square ksq = board.king_square(us);
 
-    // En passant is tricky...
     if (m.is_enpassant()) {
         Square captured_sq = to - pawn_push(us);
         Bitboard occupied = (board.pieces() ^ from ^ captured_sq) | to;
 
-        // Check if king is attacked after the move (including pawn moving)
         return !(rook_attacks_bb(ksq, occupied) & board.pieces(them, ROOK, QUEEN)) &&
                !(bishop_attacks_bb(ksq, occupied) & board.pieces(them, BISHOP, QUEEN));
     }
 
-    // King moves
     if (type_of(board.piece_on(from)) == KING) {
-        // For castling, validity is checked during generation, BUT we must re-verify for TT moves
         if (m.is_castling()) {
             if (board.in_check()) return false;
 
             if (us == WHITE) {
-                if (to == SQ_G1) { // OO
+                if (to == SQ_G1) {
                     if (!(board.castling_rights() & WHITE_OO)) return false;
                     if (board.pieces() & (square_bb(SQ_F1) | square_bb(SQ_G1))) return false;
                     if (board.is_attacked_by(them, SQ_F1) || board.is_attacked_by(them, SQ_G1)) return false;
-                } else if (to == SQ_C1) { // OOO
+                } else if (to == SQ_C1) {
                     if (!(board.castling_rights() & WHITE_OOO)) return false;
                     if (board.pieces() & (square_bb(SQ_D1) | square_bb(SQ_C1) | square_bb(SQ_B1))) return false;
                     if (board.is_attacked_by(them, SQ_D1) || board.is_attacked_by(them, SQ_C1)) return false;
                 } else return false;
             } else {
-                if (to == SQ_G8) { // oo
+                if (to == SQ_G8) {
                     if (!(board.castling_rights() & BLACK_OO)) return false;
                     if (board.pieces() & (square_bb(SQ_F8) | square_bb(SQ_G8))) return false;
                     if (board.is_attacked_by(them, SQ_F8) || board.is_attacked_by(them, SQ_G8)) return false;
-                } else if (to == SQ_C8) { // ooo
+                } else if (to == SQ_C8) {
                     if (!(board.castling_rights() & BLACK_OOO)) return false;
                     if (board.pieces() & (square_bb(SQ_D8) | square_bb(SQ_C8) | square_bb(SQ_B8))) return false;
                     if (board.is_attacked_by(them, SQ_D8) || board.is_attacked_by(them, SQ_C8)) return false;
@@ -367,21 +465,17 @@ bool MoveGen::is_legal(const Board& board, Move m) {
             }
             return true;
         }
-        // Regular king move - check if destination is attacked by enemy
         Bitboard occupied = board.pieces() ^ from;
         return !(board.attackers_to(to, occupied) & board.pieces(them));
     }
 
-    // If in check, non-king moves must block or capture the checker
     if (board.in_check()) {
         Bitboard checkers = board.checkers();
 
-        // Double check - only king moves work (already handled above)
         if (more_than_one(checkers)) {
             return false;
         }
 
-        // Single checker - must capture it or block
         Square checker_sq = lsb(checkers);
         Bitboard target = between_bb(ksq, checker_sq) | checkers;
 
@@ -390,7 +484,6 @@ bool MoveGen::is_legal(const Board& board, Move m) {
         }
     }
 
-    // Pinned pieces can only move along the pin ray
     if (board.blockers_for_king(us) & from) {
         return aligned(from, to, ksq);
     }
@@ -405,7 +498,6 @@ void MoveGen::generate_legal(const Board& board, MoveList& moves) {
         generate_all(board, moves);
     }
 
-    // Filter out illegal moves
     int legal_count = 0;
     for (int i = 0; i < moves.size(); ++i) {
         if (is_legal(board, moves[i].move)) {
@@ -413,7 +505,6 @@ void MoveGen::generate_legal(const Board& board, MoveList& moves) {
         }
     }
 
-    // Resize (truncate to legal moves only)
     moves.resize(legal_count);
 }
 
@@ -423,7 +514,6 @@ bool MoveGen::gives_check(const Board& board, Move m) {
     Color us = board.side_to_move();
     Square their_king = board.king_square(~us);
 
-    // Direct check
     PieceType pt = type_of(board.piece_on(from));
     if (m.is_promotion()) {
         pt = m.promotion_type();
@@ -433,12 +523,10 @@ bool MoveGen::gives_check(const Board& board, Move m) {
         return true;
     }
 
-    // Discovered check
     if ((board.blockers_for_king(~us) & from) && !aligned(from, to, their_king)) {
         return true;
     }
 
-    // Special moves
     if (m.is_enpassant()) {
         Square captured = to - pawn_push(us);
         Bitboard occupied = (board.pieces() ^ from ^ captured) | to;
@@ -448,7 +536,6 @@ bool MoveGen::gives_check(const Board& board, Move m) {
     }
 
     if (m.is_castling()) {
-        // Rook gives check after castling
         Square rook_to = (to > from) ? Square(to - 1) : Square(to + 1);
         Bitboard occupied = (board.pieces() ^ from) | to | rook_to;
         return rook_attacks_bb(their_king, occupied) & rook_to;
@@ -465,12 +552,10 @@ bool MoveGen::is_pseudo_legal(const Board& board, Move m) {
     Square to = m.to();
     Piece pc = board.piece_on(from);
 
-    // Must move our own piece
     if (pc == NO_PIECE || color_of(pc) != us) {
         return false;
     }
 
-    // Can't capture our own piece
     if (board.pieces(us) & to) {
         return false;
     }
@@ -478,7 +563,6 @@ bool MoveGen::is_pseudo_legal(const Board& board, Move m) {
     PieceType pt = type_of(pc);
 
     if (pt == PAWN) {
-        // Pawn moves are complex - simplified check
         Direction push = pawn_push(us);
         Rank to_rank = rank_of(to);
 
@@ -491,19 +575,16 @@ bool MoveGen::is_pseudo_legal(const Board& board, Move m) {
             return to == board.en_passant_square() && (pawn_attacks_bb(us, from) & to);
         }
 
-        // Single push
         if (to == from + push && board.empty(to)) {
             return true;
         }
 
-        // Double push
         Rank from_rank = (us == WHITE) ? RANK_2 : RANK_7;
         if (rank_of(from) == from_rank && to == from + push + push &&
             board.empty(Square(from + push)) && board.empty(to)) {
             return true;
         }
 
-        // Capture
         if ((pawn_attacks_bb(us, from) & to) && (board.pieces(~us) & to)) {
             return true;
         }
@@ -515,7 +596,6 @@ bool MoveGen::is_pseudo_legal(const Board& board, Move m) {
         if (pt != KING) return false;
         if (board.in_check()) return false;
 
-        // Check rights and occlusion
         if (us == WHITE) {
             if (to == SQ_G1) return (board.castling_rights() & WHITE_OO) && !(board.pieces() & (square_bb(SQ_F1) | square_bb(SQ_G1)));
             if (to == SQ_C1) return (board.castling_rights() & WHITE_OOO) && !(board.pieces() & (square_bb(SQ_D1) | square_bb(SQ_C1) | square_bb(SQ_B1)));
@@ -526,7 +606,6 @@ bool MoveGen::is_pseudo_legal(const Board& board, Move m) {
         return false;
     }
 
-    // Normal piece moves
     Bitboard attacks = attacks_bb(pt, from, board.pieces());
     return attacks & to;
 }

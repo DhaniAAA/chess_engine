@@ -1,24 +1,12 @@
 #include "magic.hpp"
 #include <cstring>
 
-// ============================================================================
-// Global Magic Tables
-// ============================================================================
-
 Magic BishopMagics[SQUARE_NB];
 Magic RookMagics[SQUARE_NB];
 
-// Attack tables - allocated contiguously for cache efficiency
-// Bishop needs up to 512 entries per square, Rook needs up to 4096
-static Bitboard BishopTable[0x1480];  // ~5KB
-static Bitboard RookTable[0x19000];   // ~800KB
+static Bitboard BishopTable[0x1480];
+static Bitboard RookTable[0x19000];
 
-// ============================================================================
-// Pre-computed Magic Numbers
-// These are known-good magic numbers that provide perfect hashing
-// ============================================================================
-
-// Magic numbers for Bishops (one per square, a1-h8)
 constexpr Bitboard BishopMagicNumbers[SQUARE_NB] = {
     0x40040844404084ULL,   0x2004208a004208ULL,   0x10190041080202ULL,   0x108060845042010ULL,
     0x581104180800210ULL,  0x2112080446200010ULL, 0x1080820820060210ULL, 0x3c0808410220200ULL,
@@ -38,7 +26,6 @@ constexpr Bitboard BishopMagicNumbers[SQUARE_NB] = {
     0x28000010020204ULL,   0x6000020202d0240ULL,  0x8918844842082200ULL, 0x4010011029020020ULL
 };
 
-// Magic numbers for Rooks (one per square, a1-h8)
 constexpr Bitboard RookMagicNumbers[SQUARE_NB] = {
     0x8a80104000800020ULL, 0x140002000100040ULL,  0x2801880a0017001ULL,  0x100081001000420ULL,
     0x200020010080420ULL,  0x3001c0002010008ULL,  0x8480008002000100ULL, 0x2080088004402900ULL,
@@ -58,14 +45,8 @@ constexpr Bitboard RookMagicNumbers[SQUARE_NB] = {
     0x20030a0244872ULL,    0x12001008414402ULL,   0x2006104900a0804ULL,  0x1004081002402ULL
 };
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
 namespace {
 
-// Compute the relevant occupancy mask for a square
-// Excludes edge squares (they don't affect ray generation)
 Bitboard compute_mask(PieceType pt, Square sq) {
     Bitboard mask = EMPTY_BB;
 
@@ -73,14 +54,11 @@ Bitboard compute_mask(PieceType pt, Square sq) {
     int fl = file_of(sq);
 
     if (pt == ROOK) {
-        // Horizontal rays (excluding edges)
         for (int f = fl + 1; f < 7; ++f) mask |= square_bb(make_square(File(f), Rank(rk)));
         for (int f = fl - 1; f > 0; --f) mask |= square_bb(make_square(File(f), Rank(rk)));
-        // Vertical rays (excluding edges)
         for (int r = rk + 1; r < 7; ++r) mask |= square_bb(make_square(File(fl), Rank(r)));
         for (int r = rk - 1; r > 0; --r) mask |= square_bb(make_square(File(fl), Rank(r)));
-    } else { // BISHOP
-        // Diagonal rays (excluding edges)
+    } else {
         for (int f = fl + 1, r = rk + 1; f < 7 && r < 7; ++f, ++r)
             mask |= square_bb(make_square(File(f), Rank(r)));
         for (int f = fl - 1, r = rk + 1; f > 0 && r < 7; --f, ++r)
@@ -94,7 +72,6 @@ Bitboard compute_mask(PieceType pt, Square sq) {
     return mask;
 }
 
-// Compute attacks for a given occupancy
 Bitboard compute_attacks(PieceType pt, Square sq, Bitboard occupied) {
     Bitboard attacks = EMPTY_BB;
 
@@ -102,7 +79,6 @@ Bitboard compute_attacks(PieceType pt, Square sq, Bitboard occupied) {
     int fl = file_of(sq);
 
     if (pt == ROOK) {
-        // Horizontal rays
         for (int f = fl + 1; f <= 7; ++f) {
             Square s = make_square(File(f), Rank(rk));
             attacks |= square_bb(s);
@@ -113,7 +89,6 @@ Bitboard compute_attacks(PieceType pt, Square sq, Bitboard occupied) {
             attacks |= square_bb(s);
             if (occupied & s) break;
         }
-        // Vertical rays
         for (int r = rk + 1; r <= 7; ++r) {
             Square s = make_square(File(fl), Rank(r));
             attacks |= square_bb(s);
@@ -124,8 +99,7 @@ Bitboard compute_attacks(PieceType pt, Square sq, Bitboard occupied) {
             attacks |= square_bb(s);
             if (occupied & s) break;
         }
-    } else { // BISHOP
-        // Diagonal rays
+    } else {
         for (int f = fl + 1, r = rk + 1; f <= 7 && r <= 7; ++f, ++r) {
             Square s = make_square(File(f), Rank(r));
             attacks |= square_bb(s);
@@ -151,13 +125,12 @@ Bitboard compute_attacks(PieceType pt, Square sq, Bitboard occupied) {
     return attacks;
 }
 
-// Generate the nth occupancy subset using Carry-Rippler trick
 Bitboard index_to_occupancy(int index, int bits, Bitboard mask) {
     Bitboard occupancy = EMPTY_BB;
 
     for (int i = 0; i < bits; ++i) {
         int bit = lsb(mask);
-        mask &= mask - 1;  // Clear LSB
+        mask &= mask - 1;
 
         if (index & (1 << i)) {
             occupancy |= (1ULL << bit);
@@ -167,7 +140,6 @@ Bitboard index_to_occupancy(int index, int bits, Bitboard mask) {
     return occupancy;
 }
 
-// Initialize magic for a specific piece type
 void init_magics(PieceType pt, Magic magics[], Bitboard table[], const Bitboard magic_numbers[]) {
     Bitboard* attack_ptr = table;
 
@@ -182,7 +154,6 @@ void init_magics(PieceType pt, Magic magics[], Bitboard table[], const Bitboard 
 
         m.attacks = attack_ptr;
 
-        // Generate all possible occupancies and compute attacks
         int num_occupancies = 1 << bits;
 
         for (int i = 0; i < num_occupancies; ++i) {
@@ -191,16 +162,11 @@ void init_magics(PieceType pt, Magic magics[], Bitboard table[], const Bitboard 
             m.attacks[idx] = compute_attacks(pt, sq, occupancy);
         }
 
-        // Move attack pointer forward
         attack_ptr += num_occupancies;
     }
 }
 
-} // anonymous namespace
-
-// ============================================================================
-// Public Initialization
-// ============================================================================
+}
 
 namespace Magics {
 
@@ -209,4 +175,4 @@ void init() {
     init_magics(ROOK, RookMagics, RookTable, RookMagicNumbers);
 }
 
-} // namespace Magics
+}
